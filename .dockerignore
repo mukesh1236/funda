@@ -1,0 +1,23 @@
+# Never bake secrets or test artifacts into the image
+.env
+.env.*
+*.db
+data/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+*.egg-info/
+
+# Dev tools
+.vscode/
+.claude/
+server_out.log
+server_err.log
+
+# Git
+.git/
+.gitignore

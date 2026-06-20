@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Analyst Recommendation Tracker</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="logo">📈</span>
+      <div>
+        <h1>Analyst Recommendation Tracker</h1>
+        <p class="sub">Daily buy/sell consensus &middot; target hit/miss tracking</p>
+      </div>
+    </div>
+    <div class="actions">
+      <select id="market">
+        <option value="us">🇺🇸 US stocks</option>
+        <option value="in">🇮🇳 India (NSE)</option>
+      </select>
+      <select id="theme">
+        <option value="">All segments</option>
+      </select>
+      <select id="days">
+        <option value="1">Today</option>
+        <option value="7" selected>Last 7 days</option>
+        <option value="30">Last 30 days</option>
+      </select>
+      <button id="refresh">↻ Refresh now</button>
+      <div class="user-menu" id="userMenu" hidden>
+        <span class="user-name" id="userName"></span>
+        <button id="logout" class="ghost-btn" title="Log out">Log out</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Auth overlay: blocks the dashboard until the user is logged in -->
+  <div class="auth-overlay" id="authOverlay">
+    <div class="auth-card">
+      <div class="auth-brand"><span class="logo">📈</span> Analyst Tracker</div>
+      <p class="auth-tagline">Sign in to track your own watchlist.</p>
+      <div class="auth-tabs">
+        <button class="auth-tab active" data-mode="login">Log in</button>
+        <button class="auth-tab" data-mode="signup">Sign up</button>
+      </div>
+      <form id="authForm" autocomplete="on">
+        <label class="auth-field" id="nameField" hidden>
+          <span>Display name</span>
+          <input id="authName" type="text" maxlength="60" placeholder="Jane Investor" />
+        </label>
+        <label class="auth-field">
+          <span>Email</span>
+          <input id="authEmail" type="email" required placeholder="you@example.com" autocomplete="email" />
+        </label>
+        <label class="auth-field">
+          <span>Password</span>
+          <input id="authPassword" type="password" required minlength="8" placeholder="At least 8 characters" autocomplete="current-password" />
+        </label>
+        <div class="auth-error" id="authError"></div>
+        <button type="submit" class="auth-submit" id="authSubmit">Log in</button>
+      </form>
+    </div>
+  </div>
+
+  <section class="stats" id="stats"></section>
+  <section class="highlights" id="highlights"></section>
+
+  <main>
+    <div class="tabs">
+      <button class="tab active" data-view="feed">Feed</button>
+      <button class="tab" data-view="leaderboard">Leaderboard</button>
+      <button class="tab" data-view="watchlist">★ Watchlist</button>
+      <button class="tab" data-view="digest">📰 Market Digest</button>
+    </div>
+    <div id="status" class="status"></div>
+    <div id="content"></div>
+  </main>
+
+  <script src="/app.js?v=6"></script>
+</body>
+</html>
