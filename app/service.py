@@ -233,7 +233,21 @@ def build_detail(
     recs = store.list_for_symbol(symbol)
     if not recs:
         return None
-    consensus = compute_consensus(recs)
+
+    # Compute per-source hit rates so consensus weighting is informed by history.
+    counts = store.outcome_counts(symbol)
+    resolved_total = counts.get("hit", 0) + counts.get("missed", 0)
+    source_hit_rates: Optional[dict] = None
+    source_resolved: Optional[dict] = None
+    if resolved_total > 0:
+        # We use the symbol-level hit rate as a proxy for each source here;
+        # per-source tracking requires more resolved rows than typical usage gives.
+        rate = counts.get("hit", 0) / resolved_total
+        source_hit_rates = {r.source: rate for r in recs}
+        source_resolved = {r.source: resolved_total for r in recs}
+
+    consensus = compute_consensus(recs, source_hit_rates=source_hit_rates,
+                                  source_resolved=source_resolved)
     # P0: compute_consensus returns None when recs is empty; guard before _enrich.
     if consensus is None:
         return None
@@ -273,10 +287,16 @@ def build_detail(
         notes=build_fundamentals_notes(fmap),
     ) if fmap else None
 
+    from app.models import InsiderTrade
+    from app.sources.sec_insider import fetch_insider_trades
+    raw_trades = fetch_insider_trades(symbol)
+    insider_trades = [InsiderTrade(**t) for t in raw_trades]
+
     detail = StockDetailResult(
         symbol=symbol, consensus=consensus, ownership=ownership,
         fundamentals=fundamentals,
         recommendations=rec_out, outcome=consensus.outcome, news=news,
+        insider_trades=insider_trades,
     )
     # "Why analysts recommend" summary (rule-based, optional LLM narrative).
     from app.config import get_settings

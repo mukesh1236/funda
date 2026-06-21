@@ -6,8 +6,9 @@ Two responsibilities:
   - evaluate_outcome: decide whether a recommendation's target was hit, missed,
     still pending, or expired, given the current price.
 """
+import math
 from datetime import date
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from app.models import (
     AnalystRecommendation,
@@ -23,6 +24,37 @@ from app.models import (
 # expand but NOT summed into the counts, since their analysts are already
 # represented in the aggregate totals (counting both would double-count).
 COUNTING_SOURCES = {"yahoo", "finnhub", "tipranks"}
+
+# Baseline reliability per source when we don't have enough outcome history yet.
+# Blended with actual hit rates once ≥5 resolved recommendations exist.
+_SOURCE_BASE_QUALITY: Dict[str, float] = {
+    "yahoo": 0.55,
+    "finnhub": 0.55,
+    "tipranks": 0.60,
+    "fmp": 0.58,
+    "morningstar": 0.65,
+    "polygon": 0.57,
+}
+
+
+def _recency_weight(entry_date: Optional[str], today: date, half_life_days: int = 60) -> float:
+    """Exponential decay — full weight when fresh, 0.5 after 60 days, ~0.25 after 120."""
+    if not entry_date:
+        return 1.0
+    try:
+        days_old = max(0, (today - date.fromisoformat(entry_date)).days)
+        return math.exp(-math.log(2) * days_old / half_life_days)
+    except (ValueError, TypeError):
+        return 1.0
+
+
+def _source_weight(source: str, actual_hit_rate: Optional[float], resolved: int) -> float:
+    """Blend baseline quality with actual hit rate, weighted by sample size."""
+    base = _SOURCE_BASE_QUALITY.get(source, 0.5)
+    if actual_hit_rate is None or resolved < 5:
+        return base
+    blend = min(resolved / 20.0, 1.0)   # full blend at 20 resolved calls
+    return base * (1 - blend * 0.7) + actual_hit_rate * blend * 0.7
 
 
 def _latest_per_source(recs: List[AnalystRecommendation]) -> List[AnalystRecommendation]:
@@ -40,41 +72,66 @@ def _latest_per_source(recs: List[AnalystRecommendation]) -> List[AnalystRecomme
     return [r for r in recs if (r.entry_date or "") == latest_date.get(r.source, "")]
 
 
-def compute_consensus(recs: List[AnalystRecommendation]) -> Optional[ConsensusOut]:
+def compute_consensus(
+    recs: List[AnalystRecommendation],
+    source_hit_rates: Optional[Dict[str, float]] = None,
+    source_resolved: Optional[Dict[str, int]] = None,
+) -> Optional[ConsensusOut]:
     """Aggregate recommendations for ONE symbol into a consensus rating.
 
     Uses each source's latest snapshot only (see _latest_per_source) so repeated
-    daily collection doesn't inflate counts. consensus_score = buy_count -
-    sell_count. Returns None for an empty list; the first rec's symbol is used.
+    daily collection doesn't inflate counts.
+
+    When source_hit_rates is supplied (from historical outcomes), the weighted_score
+    applies hit-rate quality × recency decay per source. conviction_score measures
+    analyst agreement (0=split, 1=unanimous).
     """
     if not recs:
         return None
 
     symbol = recs[0].symbol
     recs = _latest_per_source(recs)
+    today = date.today()
 
-    # Counts come only from aggregate sources (see COUNTING_SOURCES); summing the
-    # per-row counts lets a Yahoo bucket of 25 buys carry its full weight.
     counting = [r for r in recs if r.source in COUNTING_SOURCES]
     buy = sum(r.count for r in counting if r.action == "buy")
     hold = sum(r.count for r in counting if r.action == "hold")
     sell = sum(r.count for r in counting if r.action == "sell")
+    total = buy + hold + sell
 
     targets = [r.target_price for r in recs if r.target_price and r.target_price > 0]
     avg_target = round(sum(targets) / len(targets), 2) if targets else None
 
-    # Sources/firms reflect everything we have (named detail included).
     sources = sorted({r.source for r in recs if r.source})
     firms = sorted({r.firm for r in recs if r.firm})
     latest = max((r.entry_date for r in recs if r.entry_date), default=None)
+
+    # Conviction: how aligned are analysts? 1.0 = unanimous, 0.5 = evenly split.
+    conviction = round(max(buy, sell) / total, 3) if total > 0 else None
+
+    # Weighted score: each source's counts scaled by quality × recency.
+    w_buy = w_sell = 0.0
+    for r in counting:
+        actual_rate = (source_hit_rates or {}).get(r.source)
+        resolved = (source_resolved or {}).get(r.source, 0)
+        quality = _source_weight(r.source, actual_rate, resolved)
+        recency = _recency_weight(r.entry_date, today)
+        w = quality * recency
+        if r.action == "buy":
+            w_buy += r.count * w
+        elif r.action == "sell":
+            w_sell += r.count * w
+    weighted_score = round(w_buy - w_sell, 2) if (w_buy or w_sell) else None
 
     return ConsensusOut(
         symbol=symbol,
         buy_count=buy,
         hold_count=hold,
         sell_count=sell,
-        total_count=buy + hold + sell,
+        total_count=total,
         consensus_score=buy - sell,
+        weighted_score=weighted_score,
+        conviction_score=conviction,
         avg_target=avg_target,
         latest_entry_date=latest,
         sources=sources,

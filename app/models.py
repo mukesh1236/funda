@@ -159,6 +159,16 @@ class Fundamentals(BaseModel):
     notes: List[str] = []                    # what each number implies
 
 
+class InsiderTrade(BaseModel):
+    """One SEC Form 4 insider transaction."""
+    insider: str
+    role: Optional[str] = None
+    action: str                        # "Buy" | "Sale"
+    shares: Optional[int] = None
+    value: Optional[float] = None
+    date: Optional[str] = None
+
+
 class ConsensusOut(BaseModel):
     """Aggregate rating for one stock — the 'count the recommendations' view."""
     symbol: str
@@ -168,6 +178,8 @@ class ConsensusOut(BaseModel):
     sell_count: int
     total_count: int
     consensus_score: int                 # buy_count - sell_count
+    weighted_score: Optional[float] = None   # hit-rate × recency weighted score
+    conviction_score: Optional[float] = None # analyst agreement level 0-1
     avg_target: Optional[float] = None
     latest_entry_date: Optional[str] = None
     sources: List[str] = []
@@ -217,6 +229,7 @@ class StockDetailResult(BaseModel):
     recommendations: List[RecommendationOut]
     outcome: Optional[OutcomeOut] = None
     news: List[NewsItem] = []
+    insider_trades: List[InsiderTrade] = []
 
 
 class LeaderboardEntry(BaseModel):
@@ -374,3 +387,34 @@ class UserOut(BaseModel):
     id: int
     email: str
     display_name: Optional[str] = None
+    role: str = "user"   # "user" | "beta" | "admin"
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, v: str) -> str:
+        return (v or "").strip().lower()[:255]
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def _pw(cls, v: str) -> str:
+        return _validate_password(v)
+
+
+class SetRoleRequest(BaseModel):
+    role: str
+
+    @field_validator("role")
+    @classmethod
+    def _role(cls, v: str) -> str:
+        if v not in ("user", "beta", "admin"):
+            raise ValueError("role must be user, beta, or admin")
+        return v

@@ -65,6 +65,23 @@ class Settings(BaseSettings):
     # Set SENTRY_DSN in .env / Railway Variables to enable.
     sentry_dsn: str = ""
 
+    # Polygon.io licensed analyst data. Free Starter plan (5 req/min).
+    # Sign up at https://polygon.io — set POLYGON_API_KEY in .env to enable.
+    polygon_api_key: str = ""
+
+    # SMTP email (for password-reset links). Empty → link is logged to console.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""   # defaults to smtp_user when unset
+
+    # App public base URL (for reset-link generation).
+    app_base_url: str = "http://localhost:8100"
+
+    # Admin bootstrap — this email is promoted to role="admin" on first startup.
+    admin_email: str = ""
+
     def universe(self, market: str = "us") -> list[str]:
         """Resolve the ticker watchlist for a market ("us" | "in"): env
         override, else the union of all thematic segments for that market

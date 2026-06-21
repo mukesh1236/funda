@@ -22,12 +22,15 @@ from app.config import get_settings
 from app.jobs import run_daily
 from app.models import (
     ChangePasswordRequest,
+    ForgotPasswordRequest,
     LeaderboardResult,
     LoginRequest,
     MarketDigest,
     RecommendationFeedResult,
     RefreshResult,
     RegisterRequest,
+    ResetPasswordRequest,
+    SetRoleRequest,
     StockDetailResult,
     ThemesResult,
     UserOut,
@@ -48,6 +51,7 @@ from app.auth import (
     clear_session_cookie,
     get_current_user,
     hash_password,
+    require_admin,
     set_session_cookie,
     verify_password,
 )
@@ -75,6 +79,10 @@ _scheduler = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _scheduler
+    # Promote the admin seed email on every startup — idempotent.
+    if settings.admin_email:
+        store.ensure_admin(settings.admin_email)
+        logger.info("Admin email ensured: %s", settings.admin_email)
     if settings.enable_scheduler:
         try:
             from apscheduler.schedulers.background import BackgroundScheduler
@@ -123,6 +131,8 @@ def health():
         sources.append("fmp")
     if settings.morningstar_scrape_enabled:
         sources.append("morningstar")
+    if settings.polygon_api_key:
+        sources.append("polygon")
     return {
         "status": "ok",
         "db": settings.recommendations_db_path,
@@ -136,7 +146,8 @@ def health():
 # ── Auth ──────────────────────────────────────────────────────────────────────
 def _user_out(user: dict) -> UserOut:
     return UserOut(id=user["id"], email=user["email"],
-                   display_name=user.get("display_name"))
+                   display_name=user.get("display_name"),
+                   role=user.get("role", "user"))
 
 
 @app.post("/api/auth/register", response_model=UserOut)
@@ -177,6 +188,44 @@ def change_password(
         raise HTTPException(401, detail="Current password is incorrect.")
     store.set_password_hash(user["id"], hash_password(req.new_password))
     return {"status": "ok"}
+
+
+@app.post("/api/auth/forgot-password")
+def forgot_password(req: ForgotPasswordRequest):
+    """Send a password reset link. Always returns 200 to avoid user enumeration."""
+    from app.notifications.email import send_reset_email
+    user = store.get_user_by_email(req.email)
+    if user:
+        token = store.create_reset_token(user["id"])
+        link = f"{settings.app_base_url}/reset-password?token={token}"
+        send_reset_email(req.email, link, settings)
+    return {"status": "ok", "detail": "If that email is registered, a reset link was sent."}
+
+
+@app.post("/api/auth/reset-password")
+def reset_password(req: ResetPasswordRequest):
+    """Consume a reset token and update the password."""
+    uid = store.consume_reset_token(req.token)
+    if uid is None:
+        raise HTTPException(400, detail="Reset link is invalid or has expired.")
+    store.set_password_hash(uid, hash_password(req.new_password))
+    return {"status": "ok"}
+
+
+# ── Admin ─────────────────────────────────────────────────────────────────────
+@app.get("/api/admin/users", response_model=list[UserOut])
+def admin_list_users(_: dict = Depends(require_admin)):
+    """List all users — admin only."""
+    return [_user_out(u) for u in store.list_users()]
+
+
+@app.patch("/api/admin/users/{uid}/role")
+def admin_set_role(uid: int, req: SetRoleRequest, _: dict = Depends(require_admin)):
+    """Promote/demote a user's role — admin only."""
+    if store.get_user_by_id(uid) is None:
+        raise HTTPException(404, detail="User not found.")
+    store.set_user_role(uid, req.role)
+    return {"status": "ok", "user_id": uid, "role": req.role}
 
 
 @app.get("/api/themes", response_model=ThemesResult)

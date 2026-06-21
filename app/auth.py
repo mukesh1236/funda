@@ -11,7 +11,7 @@ import secrets
 from typing import Optional
 
 import bcrypt
-from fastapi import HTTPException, Request, Response
+from fastapi import Depends, HTTPException, Request, Response
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from app.config import Settings, get_settings
@@ -106,4 +106,18 @@ def get_current_user(request: Request) -> dict:
     user = store.get_user_by_id(uid)
     if user is None:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+def require_beta(user: dict = Depends(get_current_user)) -> dict:
+    """Requires role beta or admin. Use for early-access features."""
+    if user.get("role") not in ("beta", "admin"):
+        raise HTTPException(status_code=403, detail="Beta access required.")
+    return user
+
+
+def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    """Requires role admin. Use for admin-only endpoints."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
     return user

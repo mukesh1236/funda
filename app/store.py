@@ -6,9 +6,10 @@ the daily job refreshes. A module-level write lock keeps concurrent writers
 the rest. Connections are opened per call (cheap, thread-safe).
 """
 import os
+import secrets
 import sqlite3
 import threading
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 from app.models import AnalystRecommendation, RecommendationOutcome
@@ -67,7 +68,15 @@ CREATE TABLE IF NOT EXISTS users (
     email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
     password_hash TEXT NOT NULL,
     display_name  TEXT,
+    role          TEXT NOT NULL DEFAULT 'user',
     created_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    token      TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TEXT NOT NULL,
+    used       INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS watchlist (
@@ -129,6 +138,10 @@ class RecommendationStore:
         if wl_cols and "user_id" not in wl_cols:
             conn.execute("DROP TABLE watchlist")
             conn.executescript(_SCHEMA)
+        # Add role column to users table if missing (older databases).
+        user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+        if user_cols and "role" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
 
     # ── writes ──────────────────────────────────────────────────────────────────
     def add_recommendation(self, rec: AnalystRecommendation) -> Optional[int]:
@@ -303,6 +316,56 @@ class RecommendationStore:
         with _write_lock, self._connect() as conn:
             conn.execute("UPDATE users SET password_hash = ? WHERE id = ?",
                          (password_hash, uid))
+
+    def set_user_role(self, uid: int, role: str) -> None:
+        with _write_lock, self._connect() as conn:
+            conn.execute("UPDATE users SET role = ? WHERE id = ?", (role, uid))
+
+    def list_users(self) -> List[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, email, display_name, role, created_at FROM users ORDER BY id"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def ensure_admin(self, email: str) -> None:
+        """Promote a user to admin by email — idempotent, used at startup."""
+        if not email:
+            return
+        with _write_lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE users SET role = 'admin' WHERE email = ? COLLATE NOCASE AND role != 'admin'",
+                (email,),
+            )
+
+    # ── password reset tokens ────────────────────────────────────────────────────
+    def create_reset_token(self, user_id: int, ttl_hours: int = 1) -> str:
+        """Generate a secure token valid for ttl_hours. Old tokens for the same
+        user are purged first so only one active link exists at a time."""
+        token = secrets.token_urlsafe(32)
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
+        ).isoformat()
+        with _write_lock, self._connect() as conn:
+            conn.execute("DELETE FROM password_reset_tokens WHERE user_id = ?", (user_id,))
+            conn.execute(
+                "INSERT INTO password_reset_tokens (token, user_id, expires_at, used) VALUES (?, ?, ?, 0)",
+                (token, user_id, expires_at),
+            )
+        return token
+
+    def consume_reset_token(self, token: str) -> Optional[int]:
+        """Validate and mark a reset token as used. Returns user_id on success, None otherwise."""
+        now = datetime.now(timezone.utc).isoformat()
+        with _write_lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT user_id, expires_at, used FROM password_reset_tokens WHERE token = ?",
+                (token,),
+            ).fetchone()
+            if not row or row["used"] or row["expires_at"] < now:
+                return None
+            conn.execute("UPDATE password_reset_tokens SET used = 1 WHERE token = ?", (token,))
+            return int(row["user_id"])
 
     # ── watchlist ───────────────────────────────────────────────────────────────
     def add_watchlist(self, user_id: int, symbol: str, group: str, pin_date: str,

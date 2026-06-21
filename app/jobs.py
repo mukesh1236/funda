@@ -16,6 +16,7 @@ from app.service import build_feed
 from app.sources.finnhub import FinnhubClient, FinnhubError
 from app.sources.fmp import FMPClient, FMPError
 from app.sources.morningstar import MorningstarScraper
+from app.sources.polygon import PolygonClient, PolygonError
 from app.sources.prices import get_current_price
 from app.sources.profiles import fetch_ownership, fetch_profile, ownership_summary
 from app.sources.tipranks import TipRanksClient
@@ -59,6 +60,11 @@ def _build_sources(settings: Settings) -> list:
                 return [rec] if rec else []
 
         sources.append(("morningstar", _MorningstarAdapter()))
+
+    try:
+        sources.append(("polygon", PolygonClient(settings.polygon_api_key)))
+    except PolygonError as e:
+        logger.info("Polygon disabled: %s", e)
 
     return sources
 

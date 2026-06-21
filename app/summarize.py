@@ -126,17 +126,49 @@ def build_rule_summary(detail: StockDetailResult) -> AnalystSummary:
 
 
 def _llm_prompt(detail: StockDetailResult) -> str:
+    c = detail.consensus
     notes = [r.note for r in detail.recommendations if r.firm and r.note][:10]
     headlines = [n.title for n in detail.news][:6]
-    c = detail.consensus
+
+    # Named firm breakdown — shows conviction behind the consensus
+    named = [r for r in detail.recommendations if r.firm]
+    firm_lines = [
+        f"  {r.firm}: {r.action.upper()}"
+        + (f" | target ${r.target_price:g}" if r.target_price else "")
+        + (f" | {r.note}" if r.note else "")
+        for r in named[:8]
+    ]
+
+    # Bull vs bear framing
+    bull = f"{c.buy_count}/{c.total_count} analysts BUY" + (
+        f", avg target ${c.avg_target:g}" if c.avg_target else "")
+    bear = f"{c.sell_count} SELL" if c.sell_count else "minimal sell-side opposition"
+
+    # Conviction signal
+    if c.conviction_score is not None:
+        conviction_txt = (
+            f"High conviction ({c.conviction_score:.0%} aligned)"
+            if c.conviction_score >= 0.75
+            else f"Moderate conviction ({c.conviction_score:.0%} aligned)"
+            if c.conviction_score >= 0.5
+            else f"Low conviction — analysts split ({c.conviction_score:.0%})"
+        )
+    else:
+        conviction_txt = ""
+
     return (
-        f"You are a concise equity research assistant. In 2-3 factual sentences, "
-        f"summarize WHY Wall Street analysts currently rate {detail.symbol} the way "
-        f"they do. Consensus: {c.buy_count} buy, {c.hold_count} hold, {c.sell_count} "
-        f"sell; average target ${c.avg_target}.\n\n"
-        f"Recent analyst actions:\n- " + "\n- ".join(notes or ["(none)"]) + "\n\n"
-        f"Recent headlines:\n- " + "\n- ".join(headlines or ["(none)"]) + "\n\n"
-        f"Do not invent specifics; base it only on the above. Summary:"
+        f"You are a senior equity research analyst. In 3-4 direct sentences, explain "
+        f"WHY analysts rate {detail.symbol} this way. Focus on the investment thesis "
+        f"and key risks — not just the numbers.\n\n"
+        f"CONSENSUS: {c.buy_count} Buy, {c.hold_count} Hold, {c.sell_count} Sell. "
+        f"{conviction_txt}\n"
+        f"BULL CASE: {bull}\n"
+        f"BEAR CASE: {bear}\n\n"
+        f"NAMED FIRM RATINGS:\n" + "\n".join(firm_lines or ["  (none available)"]) + "\n\n"
+        f"RECENT ANALYST ACTIONS:\n- " + "\n- ".join(notes or ["(none)"]) + "\n\n"
+        f"MARKET HEADLINES:\n- " + "\n- ".join(headlines or ["(none)"]) + "\n\n"
+        f"Rules: Do not invent specifics. Be direct about the investment thesis. "
+        f"Mention the key risk if one is clear. Response:"
     )
 
 
