@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     session_secret: str = ""
     session_max_age_days: int = 30
 
+    # Observability — Sentry error tracking + tracing. Empty → disabled.
+    # Set SENTRY_DSN in .env / Railway Variables to enable.
+    sentry_dsn: str = ""
+
     def universe(self, market: str = "us") -> list[str]:
         """Resolve the ticker watchlist for a market ("us" | "in"): env
         override, else the union of all thematic segments for that market

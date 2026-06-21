@@ -57,6 +57,17 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+if settings.sentry_dsn:
+    import sentry_sdk
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        traces_sample_rate=0.1,
+        profiles_sample_rate=0.1,
+        send_default_pii=False,
+    )
+    logger.info("Sentry enabled.")
+
 store = RecommendationStore(settings.recommendations_db_path)
 _scheduler = None
 
