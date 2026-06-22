@@ -7,9 +7,13 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&
 let view = 'feed';
 const detailCache = {};
 
+// Thrown on 401 so callers can decide whether to prompt for login. Public
+// views ignore it; watchlist actions catch it and open the auth overlay.
+class AuthError extends Error { constructor() { super('Not authenticated'); this.auth = true; } }
+
 async function getJSON(path) {
   const res = await fetch(API + path, { cache: 'no-store' });
-  if (res.status === 401) { showAuth(); throw new Error('Not authenticated'); }
+  if (res.status === 401) throw new AuthError();
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
   return res.json();
 }
@@ -20,7 +24,7 @@ async function postJSON(path, body) {
     opts.body = JSON.stringify(body);
   }
   const res = await fetch(API + path, opts);
-  if (res.status === 401) { showAuth(); throw new Error('Not authenticated'); }
+  if (res.status === 401) throw new AuthError();
   if (!res.ok) {
     let detail = `${path} → ${res.status}`;
     try { const j = await res.json(); if (j.detail) detail = j.detail; } catch (e) {}
@@ -298,10 +302,27 @@ let _wlSelectedSym = null; // symbol chosen from dropdown
 
 async function loadWatchlist() {
   $('#highlights').innerHTML = '';
+  if (!_currentUser) {
+    $('#status').textContent = '';
+    $('#content').innerHTML = `
+      <div class="empty signin-gate">
+        <p>★ Your watchlist is private to your account.</p>
+        <p class="muted">Sign in (free) to pin stocks and track daily variation since the day you added them.</p>
+        <button id="wlSignIn" class="auth-submit" style="max-width:240px;margin:14px auto 0">Sign in to start</button>
+      </div>`;
+    $('#wlSignIn').addEventListener('click', () => showAuth());
+    return;
+  }
   const market = currentMarket();
   const mLabel = market === 'in' ? '🇮🇳 India (NSE)' : '🇺🇸 US';
   $('#status').textContent = `${mLabel} watchlist — daily variation since the day you added them.`;
-  const data = await getJSON(`/api/watchlist?market=${market}`);
+  let data;
+  try {
+    data = await getJSON(`/api/watchlist?market=${market}`);
+  } catch (e) {
+    if (e.auth) { _currentUser = null; updateAuthUI(); return loadWatchlist(); }
+    throw e;
+  }
 
   const ph = market === 'in'
     ? 'Search company or ticker e.g. HDFC Bank, Infosys, TCS…'
@@ -406,6 +427,7 @@ async function addToWatchlist() {
     _wlSelectedSym = null;
     loadWatchlist();
   } catch (e) {
+    if (e.auth) { _currentUser = null; updateAuthUI(); showAuth(); return; }
     // Surface the server's message (e.g. "'XYZ' not found. Check the ticker…").
     $('#status').textContent = e.message;
   }
@@ -413,8 +435,9 @@ async function addToWatchlist() {
 
 async function removeFromWatchlist(symbol, group) {
   try {
-    await fetch(`/api/watchlist/${encodeURIComponent(symbol)}?group=${encodeURIComponent(group)}`,
+    const res = await fetch(`/api/watchlist/${encodeURIComponent(symbol)}?group=${encodeURIComponent(group)}`,
       { method: 'DELETE' });
+    if (res.status === 401) { _currentUser = null; updateAuthUI(); showAuth(); return; }
     loadWatchlist();
   } catch (e) { $('#status').textContent = 'Remove failed: ' + e.message; }
 }
@@ -480,13 +503,27 @@ $('#refresh').addEventListener('click', async () => {
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 let _authMode = 'login';
+let _currentUser = null;
 
 function showAuth() {
   $('#authOverlay').style.display = 'flex';
-  $('#userMenu').hidden = true;
+  $('#authEmail').focus();
 }
 function hideAuth() {
   $('#authOverlay').style.display = 'none';
+  $('#authError').textContent = '';
+}
+
+// Reflect login state in the header: "Sign in" button vs. the user menu.
+function updateAuthUI() {
+  if (_currentUser) {
+    $('#userName').textContent = _currentUser.display_name || _currentUser.email;
+    $('#userMenu').hidden = false;
+    $('#signIn').hidden = true;
+  } else {
+    $('#userMenu').hidden = true;
+    $('#signIn').hidden = false;
+  }
 }
 
 function setAuthMode(mode) {
@@ -503,8 +540,28 @@ function setAuthMode(mode) {
 document.querySelectorAll('.auth-tab').forEach(t =>
   t.addEventListener('click', () => setAuthMode(t.dataset.mode)));
 
+$('#signIn').addEventListener('click', () => showAuth());
+$('#authClose').addEventListener('click', () => hideAuth());
+$('#authOverlay').addEventListener('click', (e) => {
+  if (e.target === $('#authOverlay')) hideAuth();   // click backdrop to dismiss
+});
+
+$('#authForgot').addEventListener('click', async () => {
+  const email = $('#authEmail').value.trim();
+  if (!email) { $('#authError').textContent = 'Enter your email above first.'; return; }
+  try {
+    const r = await postJSON('/api/auth/forgot-password', { email });
+    $('#authError').textContent = '';
+    $('#authError').style.color = 'var(--buy)';
+    $('#authError').textContent = r.detail || 'If that email is registered, a reset link was sent.';
+  } catch (err) {
+    $('#authError').textContent = err.message || 'Could not send reset link.';
+  }
+});
+
 $('#authForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  $('#authError').style.color = '';
   $('#authError').textContent = '';
   const email = $('#authEmail').value.trim();
   const password = $('#authPassword').value;
@@ -521,28 +578,32 @@ $('#authForm').addEventListener('submit', async (e) => {
 
 $('#logout').addEventListener('click', async () => {
   try { await postJSON('/api/auth/logout'); } catch (e) {}
-  $('#content').innerHTML = '';
+  _currentUser = null;
+  updateAuthUI();
   for (const k in detailCache) delete detailCache[k];
-  showAuth();
+  if (view === 'watchlist') render();   // swap to the sign-in gate
 });
 
 function onLoggedIn(user) {
+  _currentUser = user;
   hideAuth();
-  $('#userName').textContent = user.display_name || user.email;
-  $('#userMenu').hidden = false;
   $('#authForm').reset();
-  loadStats();
-  loadThemes();
-  render();
+  updateAuthUI();
+  if (view === 'watchlist') render();   // refresh the now-accessible watchlist
 }
 
 async function boot() {
+  // Public-first: render the dashboard for everyone, then check session in the
+  // background to flip the header into logged-in mode if a cookie is present.
+  loadStats();
+  loadThemes();
+  render();
   try {
-    const user = await getJSON('/api/auth/me');
-    onLoggedIn(user);
+    _currentUser = await getJSON('/api/auth/me');
   } catch (e) {
-    showAuth();            // 401 → getJSON already called showAuth()
+    _currentUser = null;                // 401 = just a guest; keep browsing
   }
+  updateAuthUI();
 }
 
 boot();

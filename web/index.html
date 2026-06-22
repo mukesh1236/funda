@@ -29,6 +29,7 @@
         <option value="30">Last 30 days</option>
       </select>
       <button id="refresh">↻ Refresh now</button>
+      <button id="signIn" class="ghost-btn" hidden>Sign in</button>
       <div class="user-menu" id="userMenu" hidden>
         <span class="user-name" id="userName"></span>
         <button id="logout" class="ghost-btn" title="Log out">Log out</button>
@@ -36,11 +37,12 @@
     </div>
   </header>
 
-  <!-- Auth overlay: blocks the dashboard until the user is logged in -->
+  <!-- Auth overlay: dismissible — browsing is free, login only to save a watchlist -->
   <div class="auth-overlay" id="authOverlay">
     <div class="auth-card">
+      <button class="auth-close" id="authClose" title="Close" aria-label="Close">✕</button>
       <div class="auth-brand"><span class="logo">📈</span> Analyst Tracker</div>
-      <p class="auth-tagline">Sign in to track your own watchlist.</p>
+      <p class="auth-tagline">Sign in to save stocks to your own watchlist. Browsing is free.</p>
       <div class="auth-tabs">
         <button class="auth-tab active" data-mode="login">Log in</button>
         <button class="auth-tab" data-mode="signup">Sign up</button>
@@ -60,6 +62,7 @@
         </label>
         <div class="auth-error" id="authError"></div>
         <button type="submit" class="auth-submit" id="authSubmit">Log in</button>
+        <button type="button" class="auth-forgot" id="authForgot">Forgot password?</button>
       </form>
     </div>
   </div>
@@ -78,6 +81,6 @@
     <div id="content"></div>
   </main>
 
-  <script src="/app.js?v=6"></script>
+  <script src="/app.js?v=7"></script>
 </body>
 </html>

@@ -258,15 +258,29 @@ tr.open .caret { transform: rotate(90deg); }
 
 .auth-overlay {
   position: fixed; inset: 0; z-index: 100;
-  display: flex; align-items: center; justify-content: center; padding: 20px;
+  display: none; align-items: center; justify-content: center; padding: 20px;
   background: rgba(8, 12, 22, .82); backdrop-filter: blur(3px);
 }
 .auth-card {
+  position: relative;
   width: 100%; max-width: 380px;
   background: var(--panel); border: 1px solid var(--border);
   border-radius: 16px; padding: 28px 26px;
   box-shadow: 0 20px 50px rgba(0, 0, 0, .5);
 }
+.auth-close {
+  position: absolute; top: 12px; right: 12px;
+  background: transparent; border: none; color: var(--muted);
+  font-size: 16px; cursor: pointer; padding: 4px 8px; line-height: 1;
+}
+.auth-close:hover { color: var(--text); }
+.auth-forgot {
+  display: block; width: 100%; margin-top: 12px;
+  background: transparent; border: none; color: var(--muted);
+  font-size: 12px; cursor: pointer; text-align: center;
+}
+.auth-forgot:hover { color: var(--accent); text-decoration: underline; }
+.signin-gate p { margin: 4px 0; }
 .auth-brand { font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
 .auth-tagline { margin: 6px 0 18px; font-size: 13px; color: var(--muted); }
 .auth-tabs { display: flex; gap: 6px; margin-bottom: 18px;
