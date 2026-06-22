@@ -165,6 +165,11 @@ def health():
         "scheduler": settings.enable_scheduler,
         "last_updated": store.last_daily_run(),
         "daily_run_time": f"{settings.daily_job_hour:02d}:{settings.daily_job_minute:02d}",
+        "llm": {
+            "provider": settings.summary_provider,
+            "gemini_key_set": bool(settings.gemini_api_key),
+            "gemini_model": settings.gemini_model,
+        },
     }
 
 

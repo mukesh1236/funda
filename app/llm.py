@@ -48,7 +48,13 @@ def gemini_generate(prompt: str, settings: Settings, timeout: float = 20) -> Opt
                 headers={"x-goog-api-key": settings.gemini_api_key},
                 json={"contents": [{"parts": [{"text": prompt}]}]},
             )
-            resp.raise_for_status()
+            if resp.status_code != 200:
+                # Surface the real cause (bad key, wrong model, quota) in logs.
+                logger.warning(
+                    "Gemini HTTP %s for model %s: %s",
+                    resp.status_code, settings.gemini_model, resp.text[:300],
+                )
+                return None
             data = resp.json()
             text = (
                 data.get("candidates", [{}])[0]
@@ -56,9 +62,11 @@ def gemini_generate(prompt: str, settings: Settings, timeout: float = 20) -> Opt
                 .get("parts", [{}])[0]
                 .get("text", "")
             ).strip()
+            if not text:
+                logger.warning("Gemini returned no text: %s", str(data)[:300])
             return text or None
     except Exception as e:
-        logger.info("Gemini narrative unavailable (%s).", e)
+        logger.warning("Gemini call failed: %s", e)
         return None
 
 
