@@ -23,7 +23,7 @@ COPY app/    ./app/
 COPY web/    ./web/
 COPY scripts/ ./scripts/
 
-# Persistent data directory — mount a Volume here in production
+# Persistent data directory — mount a Railway Volume at /data
 RUN mkdir -p /data
 ENV RECOMMENDATIONS_DB_PATH=/data/recommendations.db
 
@@ -31,9 +31,5 @@ ENV RECOMMENDATIONS_DB_PATH=/data/recommendations.db
 ENV PORT=8100
 
 EXPOSE 8100
-
-# Non-root user for security
-RUN useradd -m appuser && chown -R appuser /app /data
-USER appuser
 
 CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT}
