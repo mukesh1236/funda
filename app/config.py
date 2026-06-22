@@ -47,7 +47,7 @@ class Settings(BaseSettings):
 
     # Google Gemini (free tier) — get a key at https://aistudio.google.com/apikey
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-2.0-flash-lite"   # highest free-tier quota
 
     # Notifications: "console" | "whatsapp"
     notifier: str = "console"
