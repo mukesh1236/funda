@@ -114,5 +114,10 @@ def answer_question(
 
     answer = generate_narrative(prompt, settings, timeout=30)
     if not answer:
-        return None, "The AI is temporarily unavailable. Try again in a moment."
+        from app import llm
+        reason = llm.last_gemini_error
+        detail = "The AI is temporarily unavailable. Try again in a moment."
+        if reason:
+            detail += f" (reason: {reason})"
+        return None, detail
     return answer, None

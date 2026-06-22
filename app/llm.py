@@ -10,6 +10,9 @@ from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
+# Last failure reason from a Gemini call — surfaced by the chat for diagnosis.
+last_gemini_error: Optional[str] = None
+
 
 def generate_narrative(prompt: str, settings: Settings, timeout: float = 20) -> Optional[str]:
     """Route to the configured LLM provider. None if disabled or unreachable.
@@ -33,8 +36,12 @@ def generate_narrative(prompt: str, settings: Settings, timeout: float = 20) -> 
 
 
 def gemini_generate(prompt: str, settings: Settings, timeout: float = 20) -> Optional[str]:
-    """Prose from Google Gemini's free API, or None on any failure."""
+    """Prose from Google Gemini's free API, or None on any failure.
+    Sets module-level last_gemini_error with the reason on failure."""
+    global last_gemini_error
+    last_gemini_error = None
     if not settings.gemini_api_key:
+        last_gemini_error = "GEMINI_API_KEY not set"
         logger.info("Gemini selected but GEMINI_API_KEY is not set.")
         return None
     url = (
@@ -49,7 +56,8 @@ def gemini_generate(prompt: str, settings: Settings, timeout: float = 20) -> Opt
                 json={"contents": [{"parts": [{"text": prompt}]}]},
             )
             if resp.status_code != 200:
-                # Surface the real cause (bad key, wrong model, quota) in logs.
+                # Surface the real cause (bad key, wrong model, quota).
+                last_gemini_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
                 logger.warning(
                     "Gemini HTTP %s for model %s: %s",
                     resp.status_code, settings.gemini_model, resp.text[:300],
@@ -63,9 +71,11 @@ def gemini_generate(prompt: str, settings: Settings, timeout: float = 20) -> Opt
                 .get("text", "")
             ).strip()
             if not text:
+                last_gemini_error = f"empty response: {str(data)[:200]}"
                 logger.warning("Gemini returned no text: %s", str(data)[:300])
             return text or None
     except Exception as e:
+        last_gemini_error = f"{type(e).__name__}: {e}"
         logger.warning("Gemini call failed: %s", e)
         return None
 
