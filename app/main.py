@@ -6,11 +6,13 @@ Start with:
 """
 import logging
 import os
+import secrets
 import sys
 from contextlib import asynccontextmanager
+from datetime import date
 from typing import Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -117,6 +119,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def track_traffic(request: Request, call_next):
+    """Count app page loads (and first-time visitors via a cookie) for the admin
+    dashboard. Best-effort — never blocks or fails a request."""
+    response = await call_next(request)
+    try:
+        if request.method == "GET" and request.url.path in ("/", "/index.html"):
+            new_visitor = "visitor" not in request.cookies
+            store.bump_metric(date.today().isoformat(), new_visitor)
+            if new_visitor:
+                response.set_cookie(
+                    "visitor", secrets.token_hex(8),
+                    max_age=365 * 24 * 3600, httponly=True, samesite="lax", path="/",
+                )
+    except Exception as e:
+        logger.debug("traffic metric skipped: %s", e)
+    return response
 
 
 # ── API ───────────────────────────────────────────────────────────────────────
@@ -228,6 +249,12 @@ def admin_set_role(uid: int, req: SetRoleRequest, _: dict = Depends(require_admi
         raise HTTPException(404, detail="User not found.")
     store.set_user_role(uid, req.role)
     return {"status": "ok", "user_id": uid, "role": req.role}
+
+
+@app.get("/api/admin/stats")
+def admin_stats(_: dict = Depends(require_admin)):
+    """Aggregate usage metrics for the admin dashboard — admin only."""
+    return store.admin_stats()
 
 
 @app.get("/api/themes", response_model=ThemesResult)

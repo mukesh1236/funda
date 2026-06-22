@@ -482,7 +482,94 @@ async function loadDigest() {
     </div>`;
 }
 
-const VIEWS = { feed: loadFeed, leaderboard: loadLeaderboard, watchlist: loadWatchlist, digest: loadDigest };
+async function loadAdmin() {
+  $('#highlights').innerHTML = '';
+  if (!_currentUser || _currentUser.role !== 'admin') {
+    $('#status').textContent = '';
+    $('#content').innerHTML = `<div class="empty">Admin access required.</div>`;
+    return;
+  }
+  $('#status').textContent = 'Loading admin statistics…';
+  let stats, users;
+  try {
+    [stats, users] = await Promise.all([
+      getJSON('/api/admin/stats'),
+      getJSON('/api/admin/users'),
+    ]);
+  } catch (e) {
+    if (e.auth) { _currentUser = null; updateAuthUI(); showAuth(); return; }
+    $('#status').textContent = 'Could not load admin stats: ' + e.message;
+    return;
+  }
+  $('#status').textContent = 'Usage statistics · live from the database';
+
+  const u = stats.users, en = stats.engagement, cov = stats.coverage, tr = stats.traffic;
+  const card = (label, val, sub) =>
+    `<div class="kpi"><div class="kpi-v">${val}</div><div class="kpi-l">${label}</div>${sub ? `<div class="kpi-s">${sub}</div>` : ''}</div>`;
+
+  const roleStr = Object.entries(u.by_role || {}).map(([r, n]) => `${n} ${r}`).join(' · ') || '—';
+  const kpis = [
+    card('Members', u.total, roleStr),
+    card('New (7d)', u.signups_7d, `${u.signups_30d} in 30d`),
+    card('App opens', tr.hits_total, `${tr.hits_7d} in 7d`),
+    card('Unique visitors', tr.visitors_total),
+    card('Watchlist pins', en.watchlist_pins, `${en.users_with_pins} users pinning`),
+    card('Stocks covered', cov.symbols, `${cov.recommendations} recs`),
+    card('Target hit rate', cov.hit_rate_pct != null ? cov.hit_rate_pct + '%' : '—',
+      `${(cov.outcomes.hit || 0)} hit · ${(cov.outcomes.missed || 0)} missed · ${(cov.outcomes.pending || 0)} pending`),
+  ].join('');
+
+  const topPins = (en.top_pinned || []).length
+    ? `<table class="mini"><thead><tr><th>Most-pinned</th><th>Users</th></tr></thead><tbody>${
+        en.top_pinned.map(p => `<tr><td>${esc(p.symbol)}</td><td>${p.pins}</td></tr>`).join('')}</tbody></table>`
+    : '<div class="muted">No pins yet.</div>';
+
+  const daily = (tr.daily || []).length
+    ? `<table class="mini"><thead><tr><th>Day</th><th>Opens</th><th>New visitors</th></tr></thead><tbody>${
+        tr.daily.map(d => `<tr><td>${esc(d.day)}</td><td>${d.hits}</td><td>${d.visitors}</td></tr>`).join('')}</tbody></table>`
+    : '<div class="muted">No traffic recorded yet.</div>';
+
+  const roles = ['user', 'beta', 'admin'];
+  const userRows = users.map(usr => `
+    <tr>
+      <td>${usr.id}</td>
+      <td>${esc(usr.display_name || '—')}</td>
+      <td>${esc(usr.email)}</td>
+      <td>
+        <select class="role-sel" data-uid="${usr.id}">
+          ${roles.map(r => `<option value="${r}" ${usr.role === r ? 'selected' : ''}>${r}</option>`).join('')}
+        </select>
+      </td>
+    </tr>`).join('');
+
+  $('#content').innerHTML = `
+    <div class="admin-kpis">${kpis}</div>
+    <div class="admin-grid">
+      <div class="admin-box"><h4>📈 Daily traffic (14d)</h4>${daily}</div>
+      <div class="admin-box"><h4>★ Top pinned stocks</h4>${topPins}</div>
+    </div>
+    <div class="admin-box">
+      <h4>👥 Members (${users.length}) — change a role to grant beta / admin access</h4>
+      <table class="mini wide"><thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th></tr></thead>
+        <tbody>${userRows}</tbody></table>
+      <div id="adminMsg" class="muted"></div>
+    </div>`;
+
+  $('#content').querySelectorAll('.role-sel').forEach(sel =>
+    sel.addEventListener('change', async () => {
+      const uid = sel.dataset.uid, role = sel.value;
+      $('#adminMsg').textContent = `Updating user ${uid}…`;
+      try {
+        await fetch(`/api/admin/users/${uid}/role`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role }),
+        }).then(r => { if (!r.ok) throw new Error('Update failed'); });
+        $('#adminMsg').textContent = `✓ User ${uid} is now ${role}.`;
+      } catch (e) { $('#adminMsg').textContent = 'Could not update role: ' + e.message; }
+    }));
+}
+
+const VIEWS = { feed: loadFeed, leaderboard: loadLeaderboard, watchlist: loadWatchlist, digest: loadDigest, admin: loadAdmin };
 
 function render() {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === view));
@@ -522,6 +609,8 @@ function hideAuth() {
 
 // Reflect login state in the header: "Sign in" button vs. the user menu.
 function updateAuthUI() {
+  const isAdmin = _currentUser && _currentUser.role === 'admin';
+  $('#adminTab').hidden = !isAdmin;
   if (_currentUser) {
     $('#userName').textContent = _currentUser.display_name || _currentUser.email;
     $('#userMenu').hidden = false;
@@ -529,6 +618,7 @@ function updateAuthUI() {
   } else {
     $('#userMenu').hidden = true;
     $('#signIn').hidden = false;
+    if (view === 'admin') { view = 'feed'; render(); }   // drop admin view on logout
   }
 }
 

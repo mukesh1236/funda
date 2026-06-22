@@ -348,3 +348,35 @@ tr.open .caret { transform: rotate(90deg); }
   border-radius: 8px; padding: 0 16px; font-size: 13px; cursor: pointer;
 }
 .chat-input button:disabled { opacity: .5; cursor: default; }
+
+/* ── Admin dashboard ────────────────────────────────────────────────────────── */
+.admin-kpis {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px; margin-bottom: 18px;
+}
+.kpi {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; padding: 14px 16px;
+}
+.kpi-v { font-size: 26px; font-weight: 700; }
+.kpi-l { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.kpi-s { font-size: 11px; color: var(--dim); margin-top: 4px; }
+.admin-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px;
+}
+@media (max-width: 700px) { .admin-grid { grid-template-columns: 1fr; } }
+.admin-box {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; padding: 16px; margin-bottom: 16px;
+}
+.admin-box h4 { margin: 0 0 12px; font-size: 14px; }
+table.mini { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.mini th { text-align: left; color: var(--muted); font-weight: 600;
+  padding: 6px 8px; border-bottom: 1px solid var(--border); }
+table.mini td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+table.mini.wide td:last-child { width: 120px; }
+.role-sel {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 8px; font-size: 12px;
+}
+#adminMsg { margin-top: 10px; font-size: 12px; }

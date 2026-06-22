@@ -94,6 +94,12 @@ CREATE TABLE IF NOT EXISTS job_lock (
     job_id   TEXT PRIMARY KEY,
     last_run TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS metrics_daily (
+    day      TEXT PRIMARY KEY,   -- "YYYY-MM-DD"
+    hits     INTEGER NOT NULL DEFAULT 0,   -- app page loads that day
+    visitors INTEGER NOT NULL DEFAULT 0    -- first-time (new-cookie) visitors
+);
 """
 
 
@@ -366,6 +372,70 @@ class RecommendationStore:
                 return None
             conn.execute("UPDATE password_reset_tokens SET used = 1 WHERE token = ?", (token,))
             return int(row["user_id"])
+
+    # ── traffic metrics + admin stats ────────────────────────────────────────────
+    def bump_metric(self, day: str, new_visitor: bool) -> None:
+        """Record one app page-load for `day`; flag new_visitor for unique counts."""
+        nv = 1 if new_visitor else 0
+        with _write_lock, self._connect() as conn:
+            conn.execute(
+                """INSERT INTO metrics_daily (day, hits, visitors) VALUES (?, 1, ?)
+                   ON CONFLICT(day) DO UPDATE SET hits = hits + 1, visitors = visitors + ?""",
+                (day, nv, nv),
+            )
+
+    def daily_metrics(self, days: int = 14) -> List[dict]:
+        """Most recent `days` of traffic, newest first."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT day, hits, visitors FROM metrics_daily ORDER BY day DESC LIMIT ?",
+                (days,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def admin_stats(self) -> dict:
+        """Aggregate counts for the admin dashboard, in a handful of queries."""
+        today = date.today()
+        d7 = (today - timedelta(days=7)).isoformat()
+        d30 = (today - timedelta(days=30)).isoformat()
+        with self._connect() as conn:
+            def scalar(sql, args=()):
+                row = conn.execute(sql, args).fetchone()
+                return row[0] if row else 0
+
+            users_total = scalar("SELECT COUNT(*) FROM users")
+            by_role = {r["role"]: r["n"] for r in conn.execute(
+                "SELECT role, COUNT(*) AS n FROM users GROUP BY role")}
+            signups_7d = scalar("SELECT COUNT(*) FROM users WHERE created_at >= ?", (d7,))
+            signups_30d = scalar("SELECT COUNT(*) FROM users WHERE created_at >= ?", (d30,))
+
+            wl_total = scalar("SELECT COUNT(*) FROM watchlist")
+            wl_users = scalar("SELECT COUNT(DISTINCT user_id) FROM watchlist")
+            top_pins = [dict(r) for r in conn.execute(
+                """SELECT symbol, COUNT(*) AS pins FROM watchlist
+                   GROUP BY symbol ORDER BY pins DESC, symbol LIMIT 10""")]
+
+            recs_total = scalar("SELECT COUNT(*) FROM recommendations")
+            symbols_covered = scalar("SELECT COUNT(DISTINCT symbol) FROM recommendations")
+            outcomes = {r["status"]: r["n"] for r in conn.execute(
+                "SELECT status, COUNT(*) AS n FROM outcomes GROUP BY status")}
+
+            hits_total = scalar("SELECT COALESCE(SUM(hits), 0) FROM metrics_daily")
+            visitors_total = scalar("SELECT COALESCE(SUM(visitors), 0) FROM metrics_daily")
+            hits_7d = scalar("SELECT COALESCE(SUM(hits), 0) FROM metrics_daily WHERE day >= ?", (d7,))
+
+        resolved = outcomes.get("hit", 0) + outcomes.get("missed", 0)
+        hit_rate = round(outcomes.get("hit", 0) / resolved * 100, 1) if resolved else None
+        return {
+            "users": {"total": users_total, "by_role": by_role,
+                      "signups_7d": signups_7d, "signups_30d": signups_30d},
+            "engagement": {"watchlist_pins": wl_total, "users_with_pins": wl_users,
+                           "top_pinned": top_pins},
+            "coverage": {"recommendations": recs_total, "symbols": symbols_covered,
+                         "outcomes": outcomes, "hit_rate_pct": hit_rate},
+            "traffic": {"hits_total": hits_total, "visitors_total": visitors_total,
+                        "hits_7d": hits_7d, "daily": self.daily_metrics(14)},
+        }
 
     # ── watchlist ───────────────────────────────────────────────────────────────
     def add_watchlist(self, user_id: int, symbol: str, group: str, pin_date: str,
