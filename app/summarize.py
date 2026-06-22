@@ -17,7 +17,7 @@ from typing import List, Optional
 from cachetools import TTLCache
 
 from app.config import Settings
-from app.llm import ollama_generate
+from app.llm import generate_narrative
 from app.models import AnalystSummary, StockDetailResult
 
 logger = logging.getLogger(__name__)
@@ -173,8 +173,8 @@ def _llm_prompt(detail: StockDetailResult) -> str:
 
 
 def maybe_llm_narrative(detail: StockDetailResult, settings: Settings) -> Optional[str]:
-    """Best-effort prose narrative from Ollama. None on any failure."""
-    return ollama_generate(_llm_prompt(detail), settings, timeout=20)
+    """Best-effort prose narrative from the configured LLM. None on any failure."""
+    return generate_narrative(_llm_prompt(detail), settings, timeout=20)
 
 
 def build_summary(detail: StockDetailResult, settings: Settings) -> AnalystSummary:
@@ -187,7 +187,7 @@ def build_summary(detail: StockDetailResult, settings: Settings) -> AnalystSumma
     narrative = maybe_llm_narrative(detail, settings)
     if narrative:
         summary.narrative = narrative
-        summary.source = "ollama"
+        summary.source = settings.summary_provider
 
     _SUMMARY_CACHE[key] = summary
     return summary

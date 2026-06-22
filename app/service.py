@@ -308,7 +308,7 @@ def build_detail(
 def build_market_digest(settings, market: str = "us") -> MarketDigest:
     """Aggregate macro headlines for one market (US or India) from Yahoo Finance
     index news + that market's RSS feeds, with an optional LLM briefing."""
-    from app.llm import ollama_generate
+    from app.llm import generate_narrative
     from app.sources.market_news import fetch_macro_headlines
 
     raw = fetch_macro_headlines(market=market)
@@ -323,7 +323,7 @@ def build_market_digest(settings, market: str = "us") -> MarketDigest:
             "sector rotation, risk-on/risk-off sentiment, etc.).\n\n"
             f"Headlines:\n{bullets}\n\nBriefing:"
         )
-        narrative = ollama_generate(prompt, settings, timeout=30)
+        narrative = generate_narrative(prompt, settings, timeout=30)
 
     return MarketDigest(
         generated_at=_now_iso(),

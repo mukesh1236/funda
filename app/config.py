@@ -35,12 +35,19 @@ class Settings(BaseSettings):
     # Outcome validation horizon (days a target has to be hit)
     outcome_horizon_days: int = 365
 
-    # "Why analysts recommend" summary. "rule" = instant deterministic summary
-    # (no deps). "ollama" / "auto" = also try a local Ollama model for a prose
-    # narrative, falling back to the rule summary if it's unreachable.
+    # "Why analysts recommend" summary provider:
+    #   "rule"   = instant deterministic summary only (no deps, default)
+    #   "ollama" = also try a local Ollama model for a prose narrative
+    #   "gemini" = use Google Gemini's free API (set GEMINI_API_KEY)
+    #   "auto"   = try Gemini if a key is set, else Ollama
+    # Any LLM path falls back to the rule summary if it's unreachable.
     summary_provider: str = "rule"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.1:8b"
+
+    # Google Gemini (free tier) — get a key at https://aistudio.google.com/apikey
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.0-flash"
 
     # Notifications: "console" | "whatsapp"
     notifier: str = "console"
