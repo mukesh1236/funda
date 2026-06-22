@@ -530,6 +530,14 @@ class RecommendationStore:
             )
             return True
 
+    def last_daily_run(self) -> Optional[str]:
+        """ISO date the daily collect/validate job last completed, or None."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT last_run FROM job_lock WHERE job_id = 'daily'"
+            ).fetchone()
+        return row["last_run"] if row else None
+
     def outcome_counts_all(self) -> dict:
         """All resolved outcome counts in one query: {symbol: {status: count}}.
         Use this instead of calling outcome_counts(symbol) in a loop."""

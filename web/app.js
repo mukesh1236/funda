@@ -86,9 +86,17 @@ async function loadStats() {
   try {
     const h = await getJSON('/api/health');
     $('#stats').innerHTML = '';
-    [['Universe', h.universe_size], ['Sources', (h.sources || []).length],
-     ['Scheduler', h.scheduler ? 'on' : 'off']].forEach(([l, v]) =>
-      $('#stats').appendChild(el(`<div class="stat"><div class="v">${v}</div><div class="l">${l}</div></div>`)));
+    const lastUpd = h.last_updated || 'never';
+    const sched = h.scheduler ? `on · ${h.daily_run_time || ''}` : 'off';
+    const boxes = [
+      ['Stocks tracked', h.universe_size, 'Number of stocks we collect analyst ratings for'],
+      ['Data sources', (h.sources || []).length, `Active sources: ${(h.sources || []).join(', ') || 'none'}`],
+      ['Auto-refresh', sched, h.scheduler ? `Runs daily at ${h.daily_run_time} server time` : 'Daily job is off'],
+      ['Last updated', lastUpd, 'Date the daily collect + validation job last ran'],
+    ];
+    boxes.forEach(([l, v, tip]) =>
+      $('#stats').appendChild(el(
+        `<div class="stat" title="${esc(tip)}"><div class="v">${esc(String(v))}</div><div class="l">${esc(l)}</div></div>`)));
   } catch (e) { /* best-effort */ }
 }
 

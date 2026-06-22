@@ -163,6 +163,8 @@ def health():
         "universe_size_in": len(settings.universe("in")),
         "sources": sources,
         "scheduler": settings.enable_scheduler,
+        "last_updated": store.last_daily_run(),
+        "daily_run_time": f"{settings.daily_job_hour:02d}:{settings.daily_job_minute:02d}",
     }
 
 
