@@ -81,6 +81,22 @@
     <div id="content"></div>
   </main>
 
-  <script src="/app.js?v=7"></script>
+  <!-- Ask-AI chat widget -->
+  <button id="chatFab" class="chat-fab" title="Ask AI about these stocks">💬 Ask AI</button>
+  <div id="chatPanel" class="chat-panel" hidden>
+    <div class="chat-head">
+      <span>💬 Ask AI <small id="chatScope"></small></span>
+      <button id="chatClose" class="chat-x" aria-label="Close">✕</button>
+    </div>
+    <div id="chatLog" class="chat-log">
+      <div class="chat-msg bot">Ask me about today's feed, the leaderboard, or a specific stock — e.g. <em>"which stocks have the strongest buy consensus?"</em> or <em>"why is NVDA rated buy?"</em></div>
+    </div>
+    <form id="chatForm" class="chat-input">
+      <input id="chatText" placeholder="Ask a question…" autocomplete="off" maxlength="500" />
+      <button type="submit" id="chatSend">Send</button>
+    </form>
+  </div>
+
+  <script src="/app.js?v=8"></script>
 </body>
 </html>

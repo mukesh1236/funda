@@ -6,6 +6,7 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&
 
 let view = 'feed';
 const detailCache = {};
+let _chatSymbol = null;   // stock the user last expanded — gives the bot focus
 
 // Thrown on 401 so callers can decide whether to prompt for login. Public
 // views ignore it; watchlist actions catch it and open the auth overlay.
@@ -168,6 +169,7 @@ async function toggleExpand(tr) {
   if (open) { exp.style.display = 'none'; tr.classList.remove('open'); return; }
   tr.classList.add('open');
   exp.style.display = '';
+  _chatSymbol = sym;   // focus the chat bot on the stock just opened
   const body = exp.querySelector('.expand-inner');
   if (body.dataset.loaded) return;
   body.innerHTML = `<div class="loading">Loading analysts…</div>`;
@@ -489,12 +491,12 @@ function render() {
 
 document.querySelectorAll('.tab').forEach(t =>
   t.addEventListener('click', () => {
-    if (view !== t.dataset.view) for (const k in detailCache) delete detailCache[k];
+    if (view !== t.dataset.view) { for (const k in detailCache) delete detailCache[k]; _chatSymbol = null; }
     view = t.dataset.view; render();
   }));
 $('#days').addEventListener('change', () => { if (view === 'feed') loadFeed(); });
 $('#theme').addEventListener('change', () => { view = 'feed'; render(); });
-$('#market').addEventListener('change', () => { loadThemes(); view = 'feed'; render(); });
+$('#market').addEventListener('change', () => { _chatSymbol = null; loadThemes(); view = 'feed'; render(); });
 $('#refresh').addEventListener('click', async () => {
   $('#status').textContent = 'Triggering refresh…';
   try {
@@ -595,6 +597,55 @@ function onLoggedIn(user) {
   updateAuthUI();
   if (view === 'watchlist') render();   // refresh the now-accessible watchlist
 }
+
+// ── Ask-AI chat ─────────────────────────────────────────────────────────────
+function chatScopeLabel() {
+  const mkt = currentMarket() === 'in' ? '🇮🇳' : '🇺🇸';
+  return _chatSymbol ? `${mkt} · ${_chatSymbol}` : `${mkt} · ${view}`;
+}
+function addChatMsg(text, who) {
+  const log = $('#chatLog');
+  const div = el(`<div class="chat-msg ${who}"></div>`);
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  return div;
+}
+function toggleChat(open) {
+  const panel = $('#chatPanel');
+  const show = open ?? panel.hidden;
+  panel.hidden = !show;
+  $('#chatFab').hidden = show;
+  if (show) { $('#chatScope').textContent = chatScopeLabel(); $('#chatText').focus(); }
+}
+
+$('#chatFab').addEventListener('click', () => toggleChat(true));
+$('#chatClose').addEventListener('click', () => toggleChat(false));
+$('#chatForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const input = $('#chatText');
+  const q = input.value.trim();
+  if (!q) return;
+  addChatMsg(q, 'user');
+  input.value = '';
+  $('#chatScope').textContent = chatScopeLabel();
+  const thinking = addChatMsg('Thinking…', 'bot pending');
+  $('#chatSend').disabled = true;
+  try {
+    const body = { question: q, market: currentMarket() };
+    if (_chatSymbol) body.symbol = _chatSymbol;
+    const res = await postJSON('/api/chat', body);
+    thinking.classList.remove('pending');
+    thinking.textContent = res.answer;
+  } catch (err) {
+    thinking.classList.remove('pending');
+    thinking.classList.add('err');
+    thinking.textContent = err.message || 'Could not reach the AI.';
+  } finally {
+    $('#chatSend').disabled = false;
+    $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
+  }
+});
 
 async function boot() {
   // Public-first: render the dashboard for everyone, then check session in the

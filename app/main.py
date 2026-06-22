@@ -22,6 +22,8 @@ from app.config import get_settings
 from app.jobs import run_daily
 from app.models import (
     ChangePasswordRequest,
+    ChatRequest,
+    ChatResponse,
     ForgotPasswordRequest,
     LeaderboardResult,
     LoginRequest,
@@ -346,6 +348,20 @@ def market_digest(market: str = Query("us", pattern="^(us|in)$")):
     Yahoo Finance index news + that market's RSS feeds, with an optional LLM
     synthesis paragraph (requires Ollama)."""
     return build_market_digest(settings, market=market)
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+def chat(req: ChatRequest):
+    """Grounded Q&A over the live feed, leaderboard, and (optionally) one stock.
+    Answers come from the configured LLM using only the current data."""
+    from app.chat import answer_question
+
+    answer, error = answer_question(
+        store, settings, req.question, market=req.market, symbol=req.symbol
+    )
+    if error:
+        raise HTTPException(503, detail=error)
+    return ChatResponse(answer=answer)
 
 
 @app.post("/api/recommendations/refresh", response_model=RefreshResult)

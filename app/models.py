@@ -418,3 +418,38 @@ class SetRoleRequest(BaseModel):
         if v not in ("user", "beta", "admin"):
             raise ValueError("role must be user, beta, or admin")
         return v
+
+
+# ── Chat (grounded Q&A) ───────────────────────────────────────────────────────
+
+class ChatRequest(BaseModel):
+    question: str
+    market: str = "us"
+    symbol: Optional[str] = None      # focus stock the user is viewing, if any
+
+    @field_validator("question")
+    @classmethod
+    def _q(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("Ask a question.")
+        return v[:500]
+
+    @field_validator("market")
+    @classmethod
+    def _mkt(cls, v: str) -> str:
+        return v if v in ("us", "in") else "us"
+
+    @field_validator("symbol")
+    @classmethod
+    def _sym(cls, v: Optional[str]) -> Optional[str]:
+        if not v:
+            return None
+        try:
+            return normalize_symbol(v)
+        except ValueError:
+            return None
+
+
+class ChatResponse(BaseModel):
+    answer: str
