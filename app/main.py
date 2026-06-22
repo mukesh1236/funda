@@ -341,10 +341,11 @@ def ticker_search(q: str = Query("", min_length=1), market: str = Query("us", pa
 
 
 @app.get("/api/market/digest", response_model=MarketDigest)
-def market_digest():
-    """Daily macro briefing: top headlines from Yahoo Finance + CNBC + MarketWatch
-    with an optional LLM synthesis paragraph (requires Ollama)."""
-    return build_market_digest(settings)
+def market_digest(market: str = Query("us", pattern="^(us|in)$")):
+    """Daily macro briefing for a market (US or India): top headlines from
+    Yahoo Finance index news + that market's RSS feeds, with an optional LLM
+    synthesis paragraph (requires Ollama)."""
+    return build_market_digest(settings, market=market)
 
 
 @app.post("/api/recommendations/refresh", response_model=RefreshResult)

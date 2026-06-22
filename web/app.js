@@ -444,16 +444,20 @@ async function removeFromWatchlist(symbol, group) {
 
 async function loadDigest() {
   $('#highlights').innerHTML = '';
+  const market = currentMarket();
   $('#status').textContent = 'Loading macro digest…';
   let data;
   try {
-    data = await getJSON('/api/market/digest');
+    data = await getJSON(`/api/market/digest?market=${market}`);
   } catch (e) {
     $('#status').textContent = 'Could not load digest: ' + e.message;
     $('#content').innerHTML = `<div class="empty">Digest unavailable — check the server logs.</div>`;
     return;
   }
-  $('#status').textContent = `${data.headline_count} headlines · sources: Yahoo Finance, CNBC, MarketWatch`;
+  const srcLabel = market === 'in'
+    ? 'Yahoo Finance, Economic Times, Moneycontrol, Business Standard'
+    : 'Yahoo Finance, CNBC, MarketWatch';
+  $('#status').textContent = `${data.headline_count} headlines · sources: ${srcLabel}`;
 
   const narrative = data.narrative
     ? `<div class="digest-narr"><h4>🤖 AI Briefing</h4><p>${esc(data.narrative)}</p></div>`

@@ -13,13 +13,24 @@ logger = logging.getLogger(__name__)
 
 _CACHE: TTLCache = TTLCache(maxsize=16, ttl=1800)
 
+# RSS feeds per market.
 _RSS_FEEDS = {
-    "CNBC Markets": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-    "MarketWatch": "https://feeds.marketwatch.com/marketwatch/topstories/",
+    "us": {
+        "CNBC Markets": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+        "MarketWatch": "https://feeds.marketwatch.com/marketwatch/topstories/",
+    },
+    "in": {
+        "Economic Times": "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
+        "Moneycontrol": "https://www.moneycontrol.com/rss/marketreports.xml",
+        "Business Standard": "https://www.business-standard.com/rss/markets-106.rss",
+    },
 }
 
-# Index tickers whose news feeds proxy "the market" headlines.
-_MARKET_SYMBOLS = ["^GSPC", "^DJI", "^IXIC"]
+# Index tickers whose news feeds proxy "the market" headlines, per market.
+_MARKET_SYMBOLS = {
+    "us": ["^GSPC", "^DJI", "^IXIC"],          # S&P 500, Dow, Nasdaq
+    "in": ["^NSEI", "^BSESN"],                  # Nifty 50, Sensex
+}
 
 
 def _parse_rss(xml_text: str, source: str, limit: int = 8) -> List[dict]:
@@ -52,11 +63,11 @@ def _fetch_rss(url: str, source: str, limit: int = 8) -> List[dict]:
         return []
 
 
-def _fetch_yahoo_market_news(limit: int = 10) -> List[dict]:
-    """News items from S&P 500 / Dow / Nasdaq index tickers on Yahoo Finance."""
+def _fetch_yahoo_market_news(market: str = "us", limit: int = 10) -> List[dict]:
+    """News items from the market's index tickers on Yahoo Finance."""
     items: List[dict] = []
     seen: set = set()
-    for sym in _MARKET_SYMBOLS:
+    for sym in _MARKET_SYMBOLS.get(market, _MARKET_SYMBOLS["us"]):
         try:
             raw = yf.Ticker(sym).news or []
             for it in raw[:limit]:
@@ -86,22 +97,23 @@ def _fetch_yahoo_market_news(limit: int = 10) -> List[dict]:
     return items[:limit]
 
 
-def fetch_macro_headlines(limit_per_source: int = 8) -> List[dict]:
-    """Merge Yahoo + RSS headlines, deduplicated by title. Cached 30 min."""
-    cache_key = "macro_headlines"
+def fetch_macro_headlines(market: str = "us", limit_per_source: int = 8) -> List[dict]:
+    """Merge Yahoo + RSS headlines for one market, deduped by title. Cached 30 min."""
+    market = market if market in _RSS_FEEDS else "us"
+    cache_key = f"macro_headlines:{market}"
     if cache_key in _CACHE:
         return _CACHE[cache_key]
 
     items: List[dict] = []
     seen: set = set()
 
-    for item in _fetch_yahoo_market_news(limit=limit_per_source):
+    for item in _fetch_yahoo_market_news(market=market, limit=limit_per_source):
         key = item["title"].lower()
         if key not in seen:
             seen.add(key)
             items.append(item)
 
-    for source_name, url in _RSS_FEEDS.items():
+    for source_name, url in _RSS_FEEDS[market].items():
         for item in _fetch_rss(url, source_name, limit=limit_per_source):
             key = item["title"].lower()
             if key not in seen:
