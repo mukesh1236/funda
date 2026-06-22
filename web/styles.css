@@ -320,6 +320,9 @@ tr.open .caret { transform: rotate(90deg); }
   background: var(--panel); border: 1px solid var(--border);
   border-radius: 14px; box-shadow: 0 20px 50px rgba(0,0,0,.55); overflow: hidden;
 }
+/* The hidden attribute must beat display:flex above, or close won't work. */
+.chat-panel[hidden] { display: none; }
+.chat-fab[hidden] { display: none; }
 .chat-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 14px; background: var(--panel-2); font-weight: 600; font-size: 14px;
