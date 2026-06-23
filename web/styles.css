@@ -448,3 +448,10 @@ table.mini.wide td:last-child { width: 120px; }
 }
 .why-link:hover { color: var(--text); border-color: var(--muted); }
 .hl-hint { font-size: 10px; color: var(--dim); font-weight: 400; margin-left: 6px; }
+
+/* Sortable column headers */
+th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.sortable:hover { color: var(--text); background: var(--panel-2); }
+th.sorted { color: var(--accent); }
+.sort-arrow { opacity: .35; font-size: 11px; margin-left: 3px; }
+.sort-arrow.active { opacity: 1; color: var(--accent); }

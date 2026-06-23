@@ -7,6 +7,8 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&
 let view = 'feed';
 const detailCache = {};
 let _chatSymbol = null;   // stock the user last expanded — gives the bot focus
+let _feedStocks = [];     // last fetched feed stocks — used for client-side sort
+let _feedSort = { col: null, dir: 1 }; // col: return key or 'consensus_score', dir: 1=desc -1=asc
 
 // Thrown on 401 so callers can decide whether to prompt for login. Public
 // views ignore it; watchlist actions catch it and open the auth overlay.
@@ -212,27 +214,36 @@ function _updateFeedTimestamp() {
   }, 60000);
 }
 
-async function loadFeed() {
-  const days = $('#days').value;
-  const theme = $('#theme').value;
-  const market = currentMarket();
-  $('#status').textContent = 'Loading feed…';
-  const data = await getJSON(`/api/recommendations/feed?days=${days}&market=${market}${theme ? '&theme=' + encodeURIComponent(theme) : ''}`);
-  renderHighlights(data.highlights);
-  _updateFeedTimestamp();
-  _scheduleAutoRefresh();
-  $('#status').textContent = `${data.stocks.length} stocks · click a row to see which analysts and why`;
-  if (!data.stocks.length) {
-    $('#content').innerHTML = `<div class="empty">No recommendations yet.<br/>Click “Refresh now” to fetch today’s analyst calls.</div>`;
-    return;
-  }
+const _SORT_COLS = {
+  consensus: s => s.consensus_score,
+  ret1m:  s => s.returns?.one_month   ?? -Infinity,
+  ret3m:  s => s.returns?.three_month ?? -Infinity,
+  ret6m:  s => s.returns?.six_month   ?? -Infinity,
+  ret12m: s => s.returns?.twelve_month ?? -Infinity,
+};
+
+function _sortArrow(col) {
+  if (_feedSort.col !== col) return ‘<span class=”sort-arrow”>↕</span>’;
+  return _feedSort.dir === 1
+    ? ‘<span class=”sort-arrow active”>↓</span>’
+    : ‘<span class=”sort-arrow active”>↑</span>’;
+}
+
+function _sortedStocks() {
+  if (!_feedSort.col || !_SORT_COLS[_feedSort.col]) return _feedStocks;
+  const key = _SORT_COLS[_feedSort.col];
+  return [..._feedStocks].sort((a, b) => _feedSort.dir * (key(b) - key(a)));
+}
+
+function _renderFeedRows() {
+  const sorted = _sortedStocks();
   const r = s => s.returns || {};
-  const rows = data.stocks.map(s => `
-    <tr class="row" data-sym="${s.symbol}">
-      <td class="stockcell">${stockCell(s)}</td>
+  const rows = sorted.map(s => `
+    <tr class=”row” data-sym=”${s.symbol}”>
+      <td class=”stockcell”>${stockCell(s)}</td>
       <td>${countsCell(s)}</td>
       <td>${confBadge(s.confidence)}</td>
-      <td>${s.avg_target != null ? '$' + s.avg_target : '<span class="muted">—</span>'}</td>
+      <td>${s.avg_target != null ? ‘$’ + s.avg_target : ‘<span class=”muted”>—</span>’}</td>
       <td>${ret(r(s).one_month)}</td>
       <td>${ret(r(s).three_month)}</td>
       <td>${ret(r(s).six_month)}</td>
@@ -241,15 +252,51 @@ async function loadFeed() {
       <td>${statusChip(s.outcome)}</td>
       <td>${themeTags(s.themes)}</td>
     </tr>
-    <tr class="expand" data-for="${s.symbol}" style="display:none"><td colspan="11"><div class="expand-inner" data-body="${s.symbol}"></div></td></tr>`).join('');
-  $('#content').innerHTML = `
+    <tr class=”expand” data-for=”${s.symbol}” style=”display:none”><td colspan=”11”><div class=”expand-inner” data-body=”${s.symbol}”></div></td></tr>`).join(‘’);
+
+  const th = (col, label) =>
+    `<th class=”sortable${_feedSort.col === col ? ‘ sorted’ : ‘’}” data-scol=”${col}”>${label} ${_sortArrow(col)}</th>`;
+
+  $(‘#content’).innerHTML = `
     <table><thead><tr>
-      <th>Stock</th><th>Consensus</th><th>Confidence</th><th>Avg target</th>
-      <th>1M</th><th>3M</th><th>6M</th><th>12M</th><th>Big investors / funds</th>
-      <th>Target status</th><th>Segments</th>
+      <th>Stock</th>
+      ${th(‘consensus’,’Consensus’)}
+      <th>Confidence</th><th>Avg target</th>
+      ${th(‘ret1m’,’1M’)}${th(‘ret3m’,’3M’)}${th(‘ret6m’,’6M’)}${th(‘ret12m’,’12M’)}
+      <th>Big investors / funds</th><th>Target status</th><th>Segments</th>
     </tr></thead><tbody>${rows}</tbody></table>`;
-  $('#content').querySelectorAll('tr.row').forEach(tr =>
-    tr.addEventListener('click', () => toggleExpand(tr)));
+
+  $(‘#content’).querySelectorAll(‘th.sortable’).forEach(th =>
+    th.addEventListener(‘click’, () => {
+      const col = th.dataset.scol;
+      if (_feedSort.col === col) {
+        _feedSort.dir = _feedSort.dir === 1 ? -1 : 1; // toggle direction
+      } else {
+        _feedSort = { col, dir: 1 }; // new col → start descending
+      }
+      _renderFeedRows();
+    }));
+  $(‘#content’).querySelectorAll(‘tr.row’).forEach(tr =>
+    tr.addEventListener(‘click’, () => toggleExpand(tr)));
+}
+
+async function loadFeed() {
+  const days = $(‘#days’).value;
+  const theme = $(‘#theme’).value;
+  const market = currentMarket();
+  $(‘#status’).textContent = ‘Loading feed…’;
+  const data = await getJSON(`/api/recommendations/feed?days=${days}&market=${market}${theme ? ‘&theme=’ + encodeURIComponent(theme) : ‘’}`);
+  renderHighlights(data.highlights);
+  _updateFeedTimestamp();
+  _scheduleAutoRefresh();
+  _feedStocks = data.stocks;
+  _feedSort = { col: null, dir: 1 }; // reset sort on fresh load
+  $(‘#status’).textContent = `${data.stocks.length} stocks · click a row to see which analysts and why`;
+  if (!data.stocks.length) {
+    $(‘#content’).innerHTML = `<div class=”empty”>No recommendations yet.<br/>Click “Refresh now” to fetch today’s analyst calls.</div>`;
+    return;
+  }
+  _renderFeedRows();
 }
 
 async function openSymbol(sym) {
