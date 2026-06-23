@@ -32,12 +32,23 @@ def _line(s) -> str:
 
 
 # ── deterministic answer engine ───────────────────────────────────────────────
+_COMMON_WORDS = {
+    "NOW", "IT", "ALL", "ON", "OR", "ARE", "BE", "UP", "DO", "GO", "SO",
+    "AI", "ME", "MY", "BY", "IN", "AT", "TO", "OF", "IS", "HI", "AN",
+    "RE", "AS", "IF", "NO", "US", "WE", "HE", "SHE", "THE", "AND", "FOR",
+    "NOT", "BUT", "OUT", "CAN", "MAY", "HAD", "HAS", "WAS", "DID", "GET",
+    "BUY", "TOP", "HOW", "WHY", "WHO", "ANY", "NEW", "OLD", "BIG", "LOW",
+    "HIGH", "BEST", "MORE", "MOST", "SOME", "JUST", "ALSO", "THEN", "THAN",
+    "INTO", "OVER", "WELL", "ONLY", "LAST", "NEXT", "GOOD", "VERY", "REAL",
+}
+
+
 def _detect_symbol(question: str, stocks: list) -> Optional[str]:
     """Find a ticker the user mentioned (by symbol or company name)."""
     toks = {t.upper() for t in re.findall(r"[A-Za-z.\-]{2,}", question)}
     by_sym = {s.symbol.upper(): s.symbol for s in stocks}
     for t in toks:
-        if t in by_sym:
+        if t in by_sym and t not in _COMMON_WORDS:
             return by_sym[t]
     # company-name match (need a distinctive word, len >= 4)
     ql = question.lower()
