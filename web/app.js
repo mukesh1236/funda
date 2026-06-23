@@ -888,10 +888,12 @@ $('#chatForm').addEventListener('submit', async (e) => {
 (function initWelcome() {
   if (localStorage.getItem('seen_welcome')) return;
   const popup = $('#welcomePopup');
+  if (!popup) return;
   popup.hidden = false;
   const dismiss = () => { popup.hidden = true; localStorage.setItem('seen_welcome', '1'); };
-  $('#welcomeClose').addEventListener('click', dismiss);
-  $('#welcomeGotIt').addEventListener('click', dismiss);
+  const closeBtn = $('#welcomeClose'), gotItBtn = $('#welcomeGotIt');
+  if (closeBtn) closeBtn.addEventListener('click', dismiss);
+  if (gotItBtn) gotItBtn.addEventListener('click', dismiss);
 })();
 
 async function boot() {
