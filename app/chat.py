@@ -1,11 +1,14 @@
-"""Grounded Q&A over the live feed, leaderboard, and individual stocks.
+"""Q&A over the live feed, leaderboard, and individual stocks.
 
-Builds a compact text snapshot of current data and asks the configured LLM
-(Gemini / Ollama) to answer using ONLY that data — so replies are grounded in
-real consensus numbers rather than the model's training memory.
+Two layers:
+  1. A deterministic answer engine (_rule_answer) handles the common, well-shaped
+     questions directly from the data — instant, free, always available.
+  2. For open-ended questions, falls back to the configured LLM (Gemini/Ollama),
+     and if that's unavailable it returns a data overview rather than an error.
 """
 import logging
-from typing import Optional, Tuple
+import re
+from typing import List, Optional, Tuple
 
 from app.analytics import compute_consensus
 from app.config import Settings
@@ -15,12 +18,154 @@ from app.store import RecommendationStore
 
 logger = logging.getLogger(__name__)
 
-_MAX_FEED = 40        # cap context size to stay well within free-tier limits
+_MAX_FEED = 40        # cap LLM context size to stay within free-tier limits
 _MAX_LB = 20
 _MAX_NAMED = 12
 _LLM_PROVIDERS = ("gemini", "ollama", "auto")
 
 
+# ── shared formatting ─────────────────────────────────────────────────────────
+def _line(s) -> str:
+    tgt = f", avg target ${s.avg_target}" if s.avg_target else ""
+    return (f"{s.symbol} ({s.company_name or s.symbol}): "
+            f"{s.buy_count}B/{s.hold_count}H/{s.sell_count}S, score {s.consensus_score:+d}{tgt}")
+
+
+# ── deterministic answer engine ───────────────────────────────────────────────
+def _detect_symbol(question: str, stocks: list) -> Optional[str]:
+    """Find a ticker the user mentioned (by symbol or company name)."""
+    toks = {t.upper() for t in re.findall(r"[A-Za-z.\-]{2,}", question)}
+    by_sym = {s.symbol.upper(): s.symbol for s in stocks}
+    for t in toks:
+        if t in by_sym:
+            return by_sym[t]
+    # company-name match (need a distinctive word, len >= 4)
+    ql = question.lower()
+    for s in stocks:
+        name = (s.company_name or "").lower()
+        for word in re.findall(r"[a-z]{4,}", name):
+            if word in ("inc", "corp", "ltd", "limited", "company", "group", "holdings") :
+                continue
+            if word in ql:
+                return s.symbol
+    return None
+
+
+def _stock_answer(store: RecommendationStore, symbol: str, stocks: list) -> str:
+    s = next((x for x in stocks if x.symbol.upper() == symbol.upper()), None)
+    recs = store.list_for_symbol(symbol)
+    c = s or compute_consensus(recs)
+    if not c:
+        return f"I don't have analyst data for {symbol} in this market yet."
+    named = [r for r in recs if r.firm][:6]
+    parts = [
+        f"{c.symbol} ({getattr(c, 'company_name', None) or c.symbol}): "
+        f"{c.buy_count} Buy / {c.hold_count} Hold / {c.sell_count} Sell "
+        f"(net {c.consensus_score:+d})."
+    ]
+    if c.avg_target:
+        cur = c.outcome.current_price if (s and s.outcome) else None
+        if cur:
+            up = (c.avg_target - cur) / cur * 100
+            parts.append(f"Avg price target ${c.avg_target} vs ${cur} ({up:+.0f}%).")
+        else:
+            parts.append(f"Avg price target ${c.avg_target}.")
+    if getattr(c, "conviction_score", None) is not None:
+        parts.append(f"Analyst conviction (agreement): {round(c.conviction_score * 100)}%.")
+    if named:
+        parts.append("Recent named calls: " + "; ".join(
+            f"{r.firm} {r.action.upper()}" + (f" PT ${r.target_price:g}" if r.target_price else "")
+            for r in named))
+    return " ".join(parts)
+
+
+def _rule_answer(
+    store: RecommendationStore, market: str, question: str, symbol: Optional[str]
+) -> Optional[str]:
+    q = question.lower()
+    feed = build_feed(store, days=30, market=market)
+    rated = [s for s in feed.stocks if s.total_count > 0]
+
+    # Specific stock (passed in, or mentioned in the question)
+    target = symbol or _detect_symbol(question, feed.stocks)
+    if target:
+        return _stock_answer(store, target, feed.stocks)
+
+    if not rated:
+        return "No analyst-rated stocks are in the feed yet for this market. Try ↻ Refresh now."
+
+    def top(key, n=5):
+        return sorted(rated, key=key, reverse=True)[:n]
+
+    # Sell / bearish
+    if any(w in q for w in ("sell", "bearish", "avoid", "short ", "downgrade", "worst")):
+        picks = sorted([s for s in rated if s.sell_count > 0],
+                       key=lambda s: (s.sell_count, -s.consensus_score), reverse=True)[:5]
+        if not picks:
+            return "No stocks currently have a sell-leaning consensus in this market."
+        return "Most sell-rated right now:\n" + "\n".join("• " + _line(s) for s in picks)
+
+    # Conviction / agreement
+    if any(w in q for w in ("conviction", "agree", "unanimous", "consensus stronges")):
+        picks = top(lambda s: (s.conviction_score or 0, s.total_count))
+        return "Highest analyst conviction (agreement level):\n" + "\n".join(
+            f"• {s.symbol}: {round((s.conviction_score or 0) * 100)}% aligned, "
+            f"{s.buy_count}B/{s.hold_count}H/{s.sell_count}S" for s in picks)
+
+    # Hit rate / accuracy / track record
+    if any(w in q for w in ("hit rate", "hit-rate", "accurate", "track record",
+                            "reliable", "best perform", "performing")):
+        lb = build_leaderboard(store, metric="hit_rate", limit=10, market=market)
+        picks = [e for e in lb.entries if e.resolved_count > 0][:5]
+        if not picks:
+            return "Not enough resolved target outcomes yet to rank by hit rate."
+        return "Best target hit rates so far:\n" + "\n".join(
+            f"• {e.symbol}: {round(e.hit_rate * 100)}% of {e.resolved_count} resolved calls hit"
+            for e in picks)
+
+    # Buzz / coverage
+    if any(w in q for w in ("buzz", "coverage", "most analyst", "popular", "talked", "covered")):
+        picks = top(lambda s: (s.total_count, len(s.sources)))
+        return "Most analyst coverage today:\n" + "\n".join(
+            f"• {s.symbol}: {s.total_count} analysts, {s.buy_count}B/{s.hold_count}H/{s.sell_count}S"
+            for s in picks)
+
+    # Upside / target potential
+    if any(w in q for w in ("upside", "potential", "highest target", "most room", "undervalued")):
+        cand = []
+        for s in rated:
+            cur = s.outcome.current_price if s.outcome else None
+            if s.avg_target and cur and cur > 0:
+                cand.append(((s.avg_target - cur) / cur * 100, s))
+        cand.sort(key=lambda t: t[0], reverse=True)
+        if not cand:
+            return "No price-target upside data is available yet."
+        return "Highest upside to the average analyst target:\n" + "\n".join(
+            f"• {s.symbol}: {up:+.0f}% (${s.outcome.current_price} → ${s.avg_target})"
+            for up, s in cand[:5])
+
+    # Buy / bullish / best / strongest (broad)
+    if any(w in q for w in ("buy", "bullish", "strong", "best", "top", "recommend", "pick")):
+        picks = top(lambda s: (s.consensus_score, s.total_count))
+        return "Strongest buy consensus right now:\n" + "\n".join("• " + _line(s) for s in picks)
+
+    return None   # open-ended → let the LLM (or overview) handle it
+
+
+def _overview(store: RecommendationStore, market: str) -> str:
+    feed = build_feed(store, days=30, market=market)
+    rated = [s for s in feed.stocks if s.total_count > 0][:5]
+    if not rated:
+        return "No analyst-rated stocks are in the feed yet for this market."
+    return (
+        "Here are today's strongest-consensus stocks:\n"
+        + "\n".join("• " + _line(s) for s in rated)
+        + "\n\nYou can ask about a specific stock, or about conviction, hit rate, "
+        "upside, coverage, or sells."
+    )
+
+
+# ── LLM context (open-ended questions) ────────────────────────────────────────
 def _fmt_feed(store: RecommendationStore, market: str) -> str:
     feed = build_feed(store, days=30, market=market)
     lines = []
@@ -52,7 +197,6 @@ def _fmt_leaderboard(store: RecommendationStore, market: str) -> str:
 
 
 def _fmt_symbol(store: RecommendationStore, symbol: str) -> str:
-    """Lightweight per-stock context (avoids the heavy build_detail LLM path)."""
     recs = store.list_for_symbol(symbol)
     if not recs:
         return ""
@@ -93,6 +237,7 @@ def _prompt(question: str, market: str, feed: str, lb: str, sym_ctx: str) -> str
     )
 
 
+# ── entry point ───────────────────────────────────────────────────────────────
 def answer_question(
     store: RecommendationStore,
     settings: Settings,
@@ -100,24 +245,24 @@ def answer_question(
     market: str = "us",
     symbol: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Return (answer, error). error is set when the LLM isn't configured/usable."""
-    if settings.summary_provider not in _LLM_PROVIDERS:
-        return None, (
-            "AI chat isn't enabled. Set SUMMARY_PROVIDER to 'gemini' and add a "
-            "GEMINI_API_KEY (free at aistudio.google.com/apikey)."
-        )
+    """Return (answer, error). Always tries to answer from data; the LLM is an
+    enhancement for open-ended questions, never a hard dependency."""
+    # 1) Deterministic answer for common, structured questions (free, instant).
+    rule = _rule_answer(store, market, question, symbol)
+    if rule:
+        return rule, None
 
-    feed = _fmt_feed(store, market)
-    lb = _fmt_leaderboard(store, market)
-    sym_ctx = _fmt_symbol(store, symbol) if symbol else ""
-    prompt = _prompt(question, market, feed, lb, sym_ctx)
-
-    answer = generate_narrative(prompt, settings, timeout=30)
-    if not answer:
+    # 2) Open-ended → LLM if configured and reachable.
+    if settings.summary_provider in _LLM_PROVIDERS:
+        feed = _fmt_feed(store, market)
+        lb = _fmt_leaderboard(store, market)
+        sym_ctx = _fmt_symbol(store, symbol) if symbol else ""
+        prompt = _prompt(question, market, feed, lb, sym_ctx)
+        answer = generate_narrative(prompt, settings, timeout=30)
+        if answer:
+            return answer, None
         from app import llm
-        reason = llm.last_gemini_error
-        detail = "The AI is temporarily unavailable. Try again in a moment."
-        if reason:
-            detail += f" (reason: {reason})"
-        return None, detail
-    return answer, None
+        logger.info("Chat LLM unavailable (%s) — using data overview.", llm.last_gemini_error)
+
+    # 3) LLM off or unavailable → graceful data overview (never a raw error).
+    return _overview(store, market), None

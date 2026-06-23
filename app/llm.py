@@ -19,16 +19,21 @@ def generate_narrative(prompt: str, settings: Settings, timeout: float = 20) -> 
 
     Provider selection (settings.summary_provider):
       "gemini" → Gemini API
+      "grok"   → xAI Grok API (OpenAI-compatible, free tier)
       "ollama" → local Ollama
-      "auto"   → Gemini if GEMINI_API_KEY is set, else Ollama
+      "auto"   → Grok if GROK_API_KEY set, else Gemini if GEMINI_API_KEY set, else Ollama
       anything else (e.g. "rule") → None (rule summary only)
     """
     provider = settings.summary_provider
     if provider == "gemini":
         return gemini_generate(prompt, settings, timeout)
+    if provider == "grok":
+        return grok_generate(prompt, settings, timeout)
     if provider == "ollama":
         return ollama_generate(prompt, settings, timeout)
     if provider == "auto":
+        if settings.grok_api_key:
+            return grok_generate(prompt, settings, timeout)
         if settings.gemini_api_key:
             return gemini_generate(prompt, settings, timeout)
         return ollama_generate(prompt, settings, timeout)
@@ -77,6 +82,41 @@ def gemini_generate(prompt: str, settings: Settings, timeout: float = 20) -> Opt
     except Exception as e:
         last_gemini_error = f"{type(e).__name__}: {e}"
         logger.warning("Gemini call failed: %s", e)
+        return None
+
+
+def grok_generate(prompt: str, settings: Settings, timeout: float = 20) -> Optional[str]:
+    """Prose from xAI Grok's free API (OpenAI-compatible), or None on failure."""
+    global last_gemini_error
+    if not settings.grok_api_key:
+        logger.info("Grok selected but GROK_API_KEY is not set.")
+        return None
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(
+                "https://api.x.ai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {settings.grok_api_key}"},
+                json={
+                    "model": settings.grok_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 512,
+                },
+            )
+            if resp.status_code != 200:
+                last_gemini_error = f"Grok HTTP {resp.status_code}: {resp.text[:200]}"
+                logger.warning("Grok HTTP %s: %s", resp.status_code, resp.text[:300])
+                return None
+            text = (
+                resp.json()
+                .get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                or ""
+            ).strip()
+            return text or None
+    except Exception as e:
+        last_gemini_error = f"Grok {type(e).__name__}: {e}"
+        logger.warning("Grok call failed: %s", e)
         return None
 
 

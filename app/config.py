@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.0-flash-lite"   # highest free-tier quota
 
+    # xAI Grok (free tier) — get a key at https://console.x.ai
+    grok_api_key: str = ""
+    grok_model: str = "grok-3-mini"
+
     # Notifications: "console" | "whatsapp"
     notifier: str = "console"
     whatsapp_to: str = ""  # destination number when whatsapp is wired up
