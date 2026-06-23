@@ -102,20 +102,32 @@ async function loadStats() {
 
 function renderHighlights(h) {
   const box = $('#highlights');
-  if (!h || (!h.top_buzzed?.length && !h.top_buy && !h.top_sell)) { box.innerHTML = ''; return; }
+  if (!h || (!h.top_buzzed?.length && !h.top_buy && !h.top_sell && !h.top_movers?.length)) { box.innerHTML = ''; return; }
   const card = (cls, label, s, meta) => s ? `
     <div class="hl ${cls}">
       <div class="label">${label}</div>
       <div class="sym">${s.symbol} ${scoreBadge(s.consensus_score)}</div>
       <div class="meta">${meta}</div>
     </div>` : '';
+
+  const fmtPct = (p) => p >= 0 ? `+${p.toFixed(2)}%` : `${p.toFixed(2)}%`;
+  const movers = (h.top_movers || []).length ? `
+    <div class="hl movers">
+      <div class="label">🚀 Today's movers</div>
+      <ol class="buzzlist">${h.top_movers.map(s => {
+        const pct = s.day_change_pct != null ? `<span class="pct-up">${fmtPct(s.day_change_pct)}</span>` : '';
+        return `<li><b>${esc(s.symbol)}</b> ${pct} ${scoreBadge(s.consensus_score)}</li>`;
+      }).join('')}</ol>
+    </div>` : '';
+
   const buzz = (h.top_buzzed || []).length ? `
     <div class="hl buzz">
-      <div class="label">🔥 Top 5 buzzing today</div>
+      <div class="label">🔥 Most analyst coverage</div>
       <ol class="buzzlist">${h.top_buzzed.map(s =>
         `<li><b>${esc(s.symbol)}</b> <span class="muted">${s.total_count} analysts</span> ${scoreBadge(s.consensus_score)}</li>`).join('')}</ol>
     </div>` : '';
-  box.innerHTML = buzz +
+
+  box.innerHTML = movers + buzz +
     card('buy', '⬆ Strongest buy', h.top_buy,
       h.top_buy ? `${h.top_buy.buy_count} buys${h.top_buy.avg_target ? ' · target $' + h.top_buy.avg_target : ''}` : '') +
     card('sell', '⬇ Strongest sell', h.top_sell,

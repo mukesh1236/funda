@@ -1,8 +1,11 @@
 """Read-side helpers shared by the API and the daily job: build consensus
 feeds, per-symbol detail, and the leaderboard from stored data."""
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from app.analytics import compute_consensus, estimate_confidence
 from app.models import (
@@ -35,8 +38,7 @@ from app.sources.yahoo import get_news
 from app.store import RecommendationStore
 from app.themes import INDIA_THEMES, THEMES, market_of, themes_for, tickers_for
 
-import logging
-logger = logging.getLogger(__name__)
+
 
 
 def _now_iso() -> str:
@@ -91,6 +93,35 @@ def _enrich(
     return c
 
 
+def _batch_day_changes(symbols: List[str]) -> Dict[str, float]:
+    """Fetch today's % price change for a list of symbols in one yfinance call.
+    Returns {symbol: pct_change}. Silently returns {} on any failure."""
+    if not symbols:
+        return {}
+    try:
+        import yfinance as yf
+        raw = yf.download(
+            " ".join(symbols), period="2d", auto_adjust=True,
+            progress=False, group_by="ticker", threads=True,
+        )
+        result: Dict[str, float] = {}
+        for sym in symbols:
+            try:
+                # Single-ticker download has a flat column structure
+                close_col = raw["Close"] if len(symbols) == 1 else raw[sym]["Close"]
+                closes = close_col.dropna()
+                if len(closes) >= 2:
+                    prev, today = float(closes.iloc[-2]), float(closes.iloc[-1])
+                    if prev > 0:
+                        result[sym.upper()] = round((today - prev) / prev * 100, 2)
+            except Exception:
+                pass
+        return result
+    except Exception as e:
+        logger.info("batch day-change fetch failed: %s", e)
+        return {}
+
+
 def build_feed(
     store: RecommendationStore, days: int = 1, theme: Optional[str] = None,
     market: str = "us",
@@ -125,6 +156,12 @@ def build_feed(
 
     # Strongest consensus first, then by volume of coverage.
     stocks.sort(key=lambda c: (c.consensus_score, c.total_count), reverse=True)
+
+    # Enrich with live today's price change (one batch yfinance call).
+    day_changes = _batch_day_changes([s.symbol for s in stocks])
+    for s in stocks:
+        s.day_change_pct = day_changes.get(s.symbol.upper())
+
     return RecommendationFeedResult(
         generated_at=_now_iso(), days=days,
         highlights=_highlights(stocks), stocks=stocks,
@@ -212,18 +249,27 @@ def build_themes(market: str = "us") -> ThemesResult:
 
 
 def _highlights(stocks: List[ConsensusOut]) -> FeedHighlights:
-    """Most-buzzed (widest coverage) + strongest buy / sell consensus."""
+    """Most-buzzed, strongest buy/sell consensus, and today's real price movers."""
     rated = [s for s in stocks if s.total_count > 0]
     if not rated:
         return FeedHighlights()
     by_buzz = sorted(rated, key=lambda s: (s.total_count, len(s.sources)), reverse=True)
     top_buy = max(rated, key=lambda s: s.consensus_score)
     top_sell = min(rated, key=lambda s: s.consensus_score)
+
+    # Today's movers: stocks that actually gained today, sorted by % change.
+    movers = sorted(
+        [s for s in rated if s.day_change_pct is not None and s.day_change_pct > 0],
+        key=lambda s: s.day_change_pct,
+        reverse=True,
+    )[:5]
+
     return FeedHighlights(
         most_buzzed=by_buzz[0],
         top_buzzed=by_buzz[:5],
         top_buy=top_buy if top_buy.consensus_score > 0 else None,
         top_sell=top_sell if top_sell.consensus_score < 0 else None,
+        top_movers=movers,
     )
 
 

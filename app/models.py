@@ -189,6 +189,7 @@ class ConsensusOut(BaseModel):
     confidence: Optional[Confidence] = None
     ownership: Optional[OwnershipSummary] = None
     outcome: Optional[OutcomeOut] = None  # filled when validation data exists
+    day_change_pct: Optional[float] = None       # today's price % change (live)
 
 
 class FeedHighlights(BaseModel):
@@ -196,6 +197,7 @@ class FeedHighlights(BaseModel):
     top_buzzed: List[ConsensusOut] = []          # 5 most-buzzing stocks of the day
     top_buy: Optional[ConsensusOut] = None       # strongest buy consensus
     top_sell: Optional[ConsensusOut] = None      # strongest sell consensus
+    top_movers: List[ConsensusOut] = []          # top gainers today by % change
 
 
 class RecommendationFeedResult(BaseModel):

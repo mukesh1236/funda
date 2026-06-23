@@ -418,3 +418,7 @@ table.mini.wide td:last-child { width: 120px; }
   cursor: pointer; transition: opacity .15s;
 }
 .welcome-got-it:hover { opacity: .88; }
+
+/* Today's movers */
+.pct-up   { color: var(--buy); font-weight: 600; font-size: 13px; }
+.pct-down { color: var(--sell); font-weight: 600; font-size: 13px; }
