@@ -115,7 +115,7 @@ function renderHighlights(h) {
   // Today's analyst catalysts — the "why" behind moves
   const catalysts = (h.today_catalysts || []).length ? `
     <div class="hl catalysts">
-      <div class="label">📣 Today's analyst calls</div>
+      <div class="label">📣 Today's analyst calls <span class="hl-hint">click ticker for analyst view</span></div>
       <ol class="buzzlist catalyst-list">${h.today_catalysts.map(c => {
         const pct = c.day_change_pct != null
           ? `<span class="${c.day_change_pct >= 0 ? 'pct-up' : 'pct-down'}">${fmtPct(c.day_change_pct)}</span>`
@@ -123,16 +123,25 @@ function renderHighlights(h) {
         const firm = c.firm ? `<span class="muted">· ${esc(c.firm)}</span>` : '';
         const tgt  = c.target_price ? `<span class="muted">PT $${c.target_price}</span>` : '';
         const act  = `<span class="act-badge">${esc(c.action.toUpperCase())}</span>`;
-        return `<li><b>${esc(c.symbol)}</b> ${act} ${firm} ${tgt} ${pct}</li>`;
+        return `<li>
+          <button class="sym-link" onclick="openSymbol('${esc(c.symbol)}')">${esc(c.symbol)}</button>
+          ${act} ${firm} ${tgt} ${pct} ${newsLink(c.symbol)}
+        </li>`;
       }).join('')}</ol>
     </div>` : '';
 
+  const newsLink = (sym) =>
+    `<a class="why-link" href="https://finance.yahoo.com/quote/${encodeURIComponent(sym)}/news" target="_blank" rel="noopener" title="See news for ${sym}">📰 why?</a>`;
+
   const movers = (h.top_movers || []).length ? `
     <div class="hl movers">
-      <div class="label">🚀 Today's movers</div>
+      <div class="label">🚀 Today's movers <span class="hl-hint">click ticker for analyst view</span></div>
       <ol class="buzzlist">${h.top_movers.map(s => {
         const pct = s.day_change_pct != null ? `<span class="pct-up">${fmtPct(s.day_change_pct)}</span>` : '';
-        return `<li><b>${esc(s.symbol)}</b> ${pct} ${scoreBadge(s.consensus_score)}</li>`;
+        return `<li>
+          <button class="sym-link" onclick="openSymbol('${esc(s.symbol)}')">${esc(s.symbol)}</button>
+          ${pct} ${scoreBadge(s.consensus_score)} ${newsLink(s.symbol)}
+        </li>`;
       }).join('')}</ol>
     </div>` : '';
 
@@ -241,6 +250,16 @@ async function loadFeed() {
     </tr></thead><tbody>${rows}</tbody></table>`;
   $('#content').querySelectorAll('tr.row').forEach(tr =>
     tr.addEventListener('click', () => toggleExpand(tr)));
+}
+
+async function openSymbol(sym) {
+  // Switch to feed, ensure it's loaded, then open the detail panel for sym.
+  if (view !== 'feed') { view = 'feed'; await loadFeed().catch(() => {}); }
+  const tr = document.querySelector(`tr.row[data-sym="${sym}"]`);
+  if (!tr) return;
+  tr.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  const exp = document.querySelector(`tr.expand[data-for="${sym}"]`);
+  if (exp && exp.style.display === 'none') await toggleExpand(tr);
 }
 
 async function toggleExpand(tr) {
