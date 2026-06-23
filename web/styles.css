@@ -430,3 +430,6 @@ table.mini.wide td:last-child { width: 120px; }
   vertical-align: middle; letter-spacing: .3px;
 }
 .catalyst-list li { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+
+/* Feed timestamp */
+.feed-meta { padding: 2px 28px 6px; font-size: 12px; }

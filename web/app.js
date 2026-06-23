@@ -160,6 +160,49 @@ function ownCell(o) {
   return `<div class="own">${top}${buyer}</div>`;
 }
 
+let _lastFeedTime = null;   // Date of last successful feed fetch
+let _autoRefreshTimer = null;
+
+function _isMarketOpen(market) {
+  const now = new Date();
+  const day = now.getUTCDay(); // 0=Sun, 6=Sat
+  if (day === 0 || day === 6) return false;
+  if (market === 'in') {
+    // IST = UTC+5:30
+    const h = now.getUTCHours(), m = now.getUTCMinutes();
+    const mins = (h * 60 + m + 330) % (24 * 60); // +330 = +5h30
+    return mins >= 9 * 60 + 15 && mins < 15 * 60 + 30;
+  }
+  // US ET ≈ UTC-4 (summer) / UTC-5 (winter). Use UTC-4 as approximation.
+  const etMins = (now.getUTCHours() * 60 + now.getUTCMinutes() - 240 + 1440) % 1440;
+  return etMins >= 9 * 60 + 30 && etMins < 16 * 60;
+}
+
+function _scheduleAutoRefresh() {
+  if (_autoRefreshTimer) clearTimeout(_autoRefreshTimer);
+  const market = currentMarket();
+  // 15 min during market hours, 60 min outside
+  const interval = _isMarketOpen(market) ? 15 * 60 * 1000 : 60 * 60 * 1000;
+  _autoRefreshTimer = setTimeout(async () => {
+    if (view === 'feed') await loadFeed().catch(() => {});
+    _scheduleAutoRefresh();
+  }, interval);
+}
+
+function _updateFeedTimestamp() {
+  _lastFeedTime = new Date();
+  const el = $('#feedUpdated');
+  if (el) el.textContent = 'Updated just now';
+  // Tick every minute to show "X min ago"
+  if (window._feedTick) clearInterval(window._feedTick);
+  window._feedTick = setInterval(() => {
+    if (!_lastFeedTime || !$('#feedUpdated')) return;
+    const mins = Math.round((Date.now() - _lastFeedTime) / 60000);
+    const el = $('#feedUpdated');
+    if (el) el.textContent = mins < 1 ? 'Updated just now' : `Updated ${mins} min ago`;
+  }, 60000);
+}
+
 async function loadFeed() {
   const days = $('#days').value;
   const theme = $('#theme').value;
@@ -167,6 +210,8 @@ async function loadFeed() {
   $('#status').textContent = 'Loading feed…';
   const data = await getJSON(`/api/recommendations/feed?days=${days}&market=${market}${theme ? '&theme=' + encodeURIComponent(theme) : ''}`);
   renderHighlights(data.highlights);
+  _updateFeedTimestamp();
+  _scheduleAutoRefresh();
   $('#status').textContent = `${data.stocks.length} stocks · click a row to see which analysts and why`;
   if (!data.stocks.length) {
     $('#content').innerHTML = `<div class="empty">No recommendations yet.<br/>Click “Refresh now” to fetch today’s analyst calls.</div>`;

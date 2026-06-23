@@ -1,9 +1,10 @@
 """Read-side helpers shared by the API and the daily job: build consensus
 feeds, per-symbol detail, and the leaderboard from stored data."""
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -94,11 +95,20 @@ def _enrich(
     return c
 
 
-def _batch_day_changes(symbols: List[str]) -> Dict[str, float]:
+_DAY_CHANGE_CACHE: Dict[str, Tuple[float, Dict[str, float]]] = {}  # market → (ts, result)
+_DAY_CHANGE_TTL = 300  # 5 minutes — fast enough for intraday, cheap on yfinance
+
+
+def _batch_day_changes(symbols: List[str], market: str = "us") -> Dict[str, float]:
     """Fetch today's % price change for a list of symbols in one yfinance call.
-    Returns {symbol: pct_change}. Silently returns {} on any failure."""
+    Cached 5 minutes per market so rapid user refreshes don't hammer yfinance.
+    Returns {SYMBOL: pct_change}. Silently returns {} on any failure."""
     if not symbols:
         return {}
+    now = time.time()
+    cached = _DAY_CHANGE_CACHE.get(market)
+    if cached and now - cached[0] < _DAY_CHANGE_TTL:
+        return cached[1]
     try:
         import yfinance as yf
         raw = yf.download(
@@ -108,15 +118,15 @@ def _batch_day_changes(symbols: List[str]) -> Dict[str, float]:
         result: Dict[str, float] = {}
         for sym in symbols:
             try:
-                # Single-ticker download has a flat column structure
                 close_col = raw["Close"] if len(symbols) == 1 else raw[sym]["Close"]
                 closes = close_col.dropna()
                 if len(closes) >= 2:
-                    prev, today = float(closes.iloc[-2]), float(closes.iloc[-1])
+                    prev, today_c = float(closes.iloc[-2]), float(closes.iloc[-1])
                     if prev > 0:
-                        result[sym.upper()] = round((today - prev) / prev * 100, 2)
+                        result[sym.upper()] = round((today_c - prev) / prev * 100, 2)
             except Exception:
                 pass
+        _DAY_CHANGE_CACHE[market] = (now, result)
         return result
     except Exception as e:
         logger.info("batch day-change fetch failed: %s", e)
@@ -159,7 +169,7 @@ def build_feed(
     stocks.sort(key=lambda c: (c.consensus_score, c.total_count), reverse=True)
 
     # Enrich with live today's price change (one batch yfinance call).
-    day_changes = _batch_day_changes([s.symbol for s in stocks])
+    day_changes = _batch_day_changes([s.symbol for s in stocks], market=market)
     for s in stocks:
         s.day_change_pct = day_changes.get(s.symbol.upper())
 
