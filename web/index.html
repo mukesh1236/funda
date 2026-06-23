@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Analyst Recommendation Tracker</title>
-  <link rel="stylesheet" href="/styles.css?v=11" />
+  <link rel="stylesheet" href="/styles.css?v=12" />
 </head>
 <body>
   <header>
@@ -81,6 +81,21 @@
     <div id="status" class="status"></div>
     <div id="content"></div>
   </main>
+
+  <!-- Welcome popup — shown once per browser, dismissed to localStorage -->
+  <div id="welcomePopup" class="welcome-overlay" hidden>
+    <div class="welcome-card">
+      <button class="welcome-close" id="welcomeClose" aria-label="Close">✕</button>
+      <div class="welcome-title">👋 Welcome to AlphaFunds</div>
+      <ul class="welcome-features">
+        <li>📊 <strong>Live consensus</strong> — Buy / Hold / Sell ratings aggregated from 100s of analysts across US &amp; India stocks, updated daily.</li>
+        <li>🎯 <strong>Target hit tracking</strong> — See which analyst price targets were actually hit so you know who to trust.</li>
+        <li>💬 <strong>Ask AI</strong> — Chat with our AI assistant about any stock or the live feed using your real analyst data.</li>
+        <li>★ <strong>Personal watchlist</strong> — Pin stocks and track your entry price vs current value. <em>Free sign-up required.</em></li>
+      </ul>
+      <button class="welcome-got-it" id="welcomeGotIt">Got it — show me the data</button>
+    </div>
+  </div>
 
   <!-- Ask-AI chat widget -->
   <button id="chatFab" class="chat-fab" title="Ask AI about these stocks">💬 Ask AI</button>

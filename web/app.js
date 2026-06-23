@@ -745,6 +745,16 @@ $('#chatForm').addEventListener('submit', async (e) => {
   }
 });
 
+// ── Welcome popup (shown once per browser) ───────────────────────────────
+(function initWelcome() {
+  if (localStorage.getItem('seen_welcome')) return;
+  const popup = $('#welcomePopup');
+  popup.hidden = false;
+  const dismiss = () => { popup.hidden = true; localStorage.setItem('seen_welcome', '1'); };
+  $('#welcomeClose').addEventListener('click', dismiss);
+  $('#welcomeGotIt').addEventListener('click', dismiss);
+})();
+
 async function boot() {
   // Public-first: render the dashboard for everyone, then check session in the
   // background to flip the header into logged-in mode if a cookie is present.

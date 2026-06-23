@@ -383,3 +383,38 @@ table.mini.wide td:last-child { width: 120px; }
   border-radius: 6px; padding: 4px 8px; font-size: 12px;
 }
 #adminMsg { margin-top: 10px; font-size: 12px; }
+
+/* ── Welcome popup ───────────────────────────────────────────────────────── */
+.welcome-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.65);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 200; animation: fadeIn .2s ease;
+}
+.welcome-overlay[hidden] { display: none; }
+.welcome-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 16px; padding: 32px 28px 24px; max-width: 480px; width: 90%;
+  position: relative; box-shadow: 0 24px 60px rgba(0,0,0,.5);
+}
+.welcome-close {
+  position: absolute; top: 14px; right: 16px; background: none;
+  border: none; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1;
+}
+.welcome-close:hover { color: var(--text); }
+.welcome-title {
+  font-size: 20px; font-weight: 700; margin-bottom: 20px; color: var(--text);
+}
+.welcome-features {
+  list-style: none; padding: 0; margin: 0 0 24px; display: flex; flex-direction: column; gap: 14px;
+}
+.welcome-features li {
+  font-size: 14px; line-height: 1.5; color: var(--muted); padding-left: 4px;
+}
+.welcome-features li strong { color: var(--text); }
+.welcome-features li em { color: var(--dim); font-style: normal; }
+.welcome-got-it {
+  width: 100%; padding: 12px; background: var(--accent); color: #fff;
+  border: none; border-radius: 8px; font-size: 15px; font-weight: 600;
+  cursor: pointer; transition: opacity .15s;
+}
+.welcome-got-it:hover { opacity: .88; }
