@@ -192,12 +192,24 @@ class ConsensusOut(BaseModel):
     day_change_pct: Optional[float] = None       # today's price % change (live)
 
 
+
+class TodayCall(BaseModel):
+    """A single analyst call published today — the catalyst behind a price move."""
+    symbol: str
+    company_name: Optional[str] = None
+    firm: Optional[str] = None
+    action: str                        # "buy", "upgrade", "initiate", etc.
+    target_price: Optional[float] = None
+    day_change_pct: Optional[float] = None   # how much the stock moved today
+
+
 class FeedHighlights(BaseModel):
     most_buzzed: Optional[ConsensusOut] = None   # most analyst coverage
     top_buzzed: List[ConsensusOut] = []          # 5 most-buzzing stocks of the day
     top_buy: Optional[ConsensusOut] = None       # strongest buy consensus
     top_sell: Optional[ConsensusOut] = None      # strongest sell consensus
     top_movers: List[ConsensusOut] = []          # top gainers today by % change
+    today_catalysts: List[TodayCall] = []        # analyst calls published today
 
 
 class RecommendationFeedResult(BaseModel):

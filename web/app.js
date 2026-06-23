@@ -111,6 +111,22 @@ function renderHighlights(h) {
     </div>` : '';
 
   const fmtPct = (p) => p >= 0 ? `+${p.toFixed(2)}%` : `${p.toFixed(2)}%`;
+
+  // Today's analyst catalysts — the "why" behind moves
+  const catalysts = (h.today_catalysts || []).length ? `
+    <div class="hl catalysts">
+      <div class="label">📣 Today's analyst calls</div>
+      <ol class="buzzlist catalyst-list">${h.today_catalysts.map(c => {
+        const pct = c.day_change_pct != null
+          ? `<span class="${c.day_change_pct >= 0 ? 'pct-up' : 'pct-down'}">${fmtPct(c.day_change_pct)}</span>`
+          : '';
+        const firm = c.firm ? `<span class="muted">· ${esc(c.firm)}</span>` : '';
+        const tgt  = c.target_price ? `<span class="muted">PT $${c.target_price}</span>` : '';
+        const act  = `<span class="act-badge">${esc(c.action.toUpperCase())}</span>`;
+        return `<li><b>${esc(c.symbol)}</b> ${act} ${firm} ${tgt} ${pct}</li>`;
+      }).join('')}</ol>
+    </div>` : '';
+
   const movers = (h.top_movers || []).length ? `
     <div class="hl movers">
       <div class="label">🚀 Today's movers</div>
@@ -127,7 +143,7 @@ function renderHighlights(h) {
         `<li><b>${esc(s.symbol)}</b> <span class="muted">${s.total_count} analysts</span> ${scoreBadge(s.consensus_score)}</li>`).join('')}</ol>
     </div>` : '';
 
-  box.innerHTML = movers + buzz +
+  box.innerHTML = catalysts + movers + buzz +
     card('buy', '⬆ Strongest buy', h.top_buy,
       h.top_buy ? `${h.top_buy.buy_count} buys${h.top_buy.avg_target ? ' · target $' + h.top_buy.avg_target : ''}` : '') +
     card('sell', '⬇ Strongest sell', h.top_sell,

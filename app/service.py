@@ -12,6 +12,7 @@ from app.models import (
     ConsensusOut,
     DailyPoint,
     FeedHighlights,
+    TodayCall,
     Fundamentals,
     Holder,
     LeaderboardEntry,
@@ -164,7 +165,7 @@ def build_feed(
 
     return RecommendationFeedResult(
         generated_at=_now_iso(), days=days,
-        highlights=_highlights(stocks), stocks=stocks,
+        highlights=_highlights(stocks, store, market), stocks=stocks,
     )
 
 
@@ -248,8 +249,12 @@ def build_themes(market: str = "us") -> ThemesResult:
     ])
 
 
-def _highlights(stocks: List[ConsensusOut]) -> FeedHighlights:
-    """Most-buzzed, strongest buy/sell consensus, and today's real price movers."""
+def _highlights(
+    stocks: List[ConsensusOut],
+    store: "RecommendationStore",
+    market: str = "us",
+) -> FeedHighlights:
+    """Most-buzzed, strongest buy/sell consensus, today's movers, and today's catalysts."""
     rated = [s for s in stocks if s.total_count > 0]
     if not rated:
         return FeedHighlights()
@@ -264,12 +269,51 @@ def _highlights(stocks: List[ConsensusOut]) -> FeedHighlights:
         reverse=True,
     )[:5]
 
+    # Today's catalysts: analyst calls published today (the "why" behind moves).
+    today = date.today().isoformat()
+    # Build lookup: symbol → ConsensusOut for day_change_pct + company_name
+    stock_map = {s.symbol.upper(): s for s in rated}
+    today_recs = [
+        r for r in store.list_recent(days=1)
+        if r.entry_date == today
+        and market_of(r.symbol) == market
+        and r.action.lower() in ("buy", "strong buy", "outperform", "overweight",
+                                  "upgrade", "initiate", "positive", "accumulate")
+    ]
+    # Dedupe: one call per symbol (most bullish / most specific firm first)
+    seen: set = set()
+    catalysts: List[TodayCall] = []
+    for r in sorted(today_recs, key=lambda r: (r.firm is not None, r.target_price is not None), reverse=True):
+        sym = r.symbol.upper()
+        if sym in seen:
+            continue
+        seen.add(sym)
+        stock = stock_map.get(sym)
+        catalysts.append(TodayCall(
+            symbol=r.symbol,
+            company_name=stock.company_name if stock else None,
+            firm=r.firm,
+            action=r.action,
+            target_price=r.target_price,
+            day_change_pct=stock.day_change_pct if stock else None,
+        ))
+        if len(catalysts) >= 8:
+            break
+
+    # Sort: moving stocks with a named firm call first
+    catalysts.sort(key=lambda c: (
+        c.day_change_pct is not None and c.day_change_pct > 0,
+        c.firm is not None,
+        c.day_change_pct or 0,
+    ), reverse=True)
+
     return FeedHighlights(
         most_buzzed=by_buzz[0],
         top_buzzed=by_buzz[:5],
         top_buy=top_buy if top_buy.consensus_score > 0 else None,
         top_sell=top_sell if top_sell.consensus_score < 0 else None,
         top_movers=movers,
+        today_catalysts=catalysts[:6],
     )
 
 
