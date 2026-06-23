@@ -78,9 +78,9 @@ def _stock_answer(store: RecommendationStore, symbol: str, stocks: list) -> str:
         cur = c.outcome.current_price if (s and s.outcome) else None
         if cur:
             up = (c.avg_target - cur) / cur * 100
-            parts.append(f"Avg price target ${c.avg_target} vs ${cur} ({up:+.0f}%).")
+            parts.append(f"Avg price target ${c.avg_target:.2f} vs ${cur:.2f} ({up:+.0f}%).")
         else:
-            parts.append(f"Avg price target ${c.avg_target}.")
+            parts.append(f"Avg price target ${c.avg_target:.2f}.")
     if getattr(c, "conviction_score", None) is not None:
         parts.append(f"Analyst conviction (agreement): {round(c.conviction_score * 100)}%.")
     if named:
@@ -152,7 +152,7 @@ def _rule_answer(
         if not cand:
             return "No price-target upside data is available yet."
         return "Highest upside to the average analyst target:\n" + "\n".join(
-            f"• {s.symbol}: {up:+.0f}% (${s.outcome.current_price} → ${s.avg_target})"
+            f"• {s.symbol}: {up:+.0f}% (${s.outcome.current_price:.2f} → ${s.avg_target:.2f})"
             for up, s in cand[:5])
 
     # Buy / bullish / best / strongest (broad)
