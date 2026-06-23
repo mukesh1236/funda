@@ -235,16 +235,21 @@ def _prompt(question: str, market: str, feed: str, lb: str, sym_ctx: str) -> str
     region = "Indian (NSE)" if market == "in" else "US"
     focus = f"\n{sym_ctx}\n" if sym_ctx else ""
     return (
-        "You are AlphaFunds' equity-research assistant. Answer the user's question "
-        "using ONLY the data below. If the data doesn't contain the answer, say so "
-        "plainly — never invent tickers, prices, ratings, or figures. Be concise and "
-        "specific; cite tickers and numbers from the data. Do not give personalized "
-        "investment advice or tell the user what to buy/sell.\n\n"
+        "You are AlphaFunds' data assistant. Your job is to summarise and interpret "
+        "the analyst dataset provided below — nothing else.\n\n"
+        "STRICT RULES:\n"
+        "- Use ONLY the numbers and stocks in the dataset below.\n"
+        "- Do NOT use your training knowledge about any company, stock, or market.\n"
+        "- Do NOT add company backgrounds, history, products, or general market commentary.\n"
+        "- If a company is not in the dataset, say: 'I don't have analyst data for that "
+        "stock in the current feed.'\n"
+        "- Be short: 2-5 sentences max. Cite tickers and numbers from the data.\n"
+        "- Do not give investment advice.\n\n"
         f"MARKET: {region}\n\n"
-        f"FEED — analyst consensus per stock (last 30 days):\n{feed}\n\n"
-        f"LEADERBOARD — ranked by realized target hit rate:\n{lb}\n"
+        f"ANALYST FEED (last 30 days):\n{feed}\n\n"
+        f"LEADERBOARD (by hit rate):\n{lb}\n"
         f"{focus}\n"
-        f"USER QUESTION: {question}\n\nANSWER:"
+        f"USER QUESTION: {question}\n\nANSWER (data only, 2-5 sentences):"
     )
 
 
@@ -267,7 +272,9 @@ def answer_question(
     if settings.summary_provider in _LLM_PROVIDERS:
         feed = _fmt_feed(store, market)
         lb = _fmt_leaderboard(store, market)
-        sym_ctx = _fmt_symbol(store, symbol) if symbol else ""
+        # include stock context even when symbol comes from question text
+        detected = symbol or _detect_symbol(question, build_feed(store, days=30, market=market).stocks)
+        sym_ctx = _fmt_symbol(store, detected) if detected else ""
         prompt = _prompt(question, market, feed, lb, sym_ctx)
         answer = generate_narrative(prompt, settings, timeout=30)
         if answer:
