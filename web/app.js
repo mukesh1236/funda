@@ -113,6 +113,8 @@ function renderHighlights(h) {
     </div>` : '';
 
   const fmtPct = (p) => p >= 0 ? `+${p.toFixed(2)}%` : `${p.toFixed(2)}%`;
+  const newsLink = (sym) =>
+    `<a class="why-link" href="https://finance.yahoo.com/quote/${encodeURIComponent(sym)}/news" target="_blank" rel="noopener" title="See news for ${sym}">📰 why?</a>`;
 
   // Today's analyst catalysts — the "why" behind moves
   const catalysts = (h.today_catalysts || []).length ? `
@@ -131,9 +133,6 @@ function renderHighlights(h) {
         </li>`;
       }).join('')}</ol>
     </div>` : '';
-
-  const newsLink = (sym) =>
-    `<a class="why-link" href="https://finance.yahoo.com/quote/${encodeURIComponent(sym)}/news" target="_blank" rel="noopener" title="See news for ${sym}">📰 why?</a>`;
 
   const movers = (h.top_movers || []).length ? `
     <div class="hl movers">
