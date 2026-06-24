@@ -211,17 +211,25 @@ function _scheduleAutoRefresh() {
   }, interval);
 }
 
+function _fmtTimestamp(d) {
+  const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return `${date}, ${time}`;
+}
+
 function _updateFeedTimestamp() {
   _lastFeedTime = new Date();
+  const stamp = _fmtTimestamp(_lastFeedTime);
   const el = $('#feedUpdated');
-  if (el) el.textContent = 'Updated just now';
-  // Tick every minute to show "X min ago"
+  if (el) el.textContent = `Updated ${stamp}`;
   if (window._feedTick) clearInterval(window._feedTick);
   window._feedTick = setInterval(() => {
-    if (!_lastFeedTime || !$('#feedUpdated')) return;
-    const mins = Math.round((Date.now() - _lastFeedTime) / 60000);
+    if (!_lastFeedTime) return;
     const el = $('#feedUpdated');
-    if (el) el.textContent = mins < 1 ? 'Updated just now' : `Updated ${mins} min ago`;
+    if (!el) return;
+    const mins = Math.round((Date.now() - _lastFeedTime) / 60000);
+    const rel = mins < 1 ? 'just now' : `${mins} min ago`;
+    el.textContent = `Updated ${stamp} · ${rel}`;
   }, 60000);
 }
 
