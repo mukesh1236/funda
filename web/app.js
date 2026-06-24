@@ -1,5 +1,17 @@
 const API = ''; // same origin
 
+// Catch all uncaught JS errors and show them visibly so we can diagnose
+window.onerror = (msg, src, line, col, err) => {
+  const d = document.getElementById('content') || document.body;
+  d.innerHTML = `<div style="color:#f87171;background:#1e293b;padding:20px;border-radius:8px;margin:20px;font-family:monospace">
+    <b>JS Error (line ${line}):</b> ${msg}<br><pre>${err?.stack || ''}</pre></div>`;
+};
+window.onunhandledrejection = (e) => {
+  const d = document.getElementById('content') || document.body;
+  d.innerHTML = `<div style="color:#f87171;background:#1e293b;padding:20px;border-radius:8px;margin:20px;font-family:monospace">
+    <b>Unhandled Promise Error:</b> ${e.reason?.message || e.reason}<br><pre>${e.reason?.stack || ''}</pre></div>`;
+};
+
 const $ = (s) => document.querySelector(s);
 const el = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; };
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
