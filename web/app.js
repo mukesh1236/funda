@@ -930,3 +930,223 @@ async function boot() {
 }
 
 boot();
+
+// ── Fund Tracker tab ──────────────────────────────────────────────────────────
+
+function _expBadge(ratio) {
+  if (ratio == null) return '<span class="muted">—</span>';
+  const cls = ratio < 0.10 ? 'exp-green' : ratio < 0.50 ? 'exp-amber' : 'exp-red';
+  return `<span class="exp-badge ${cls}">${ratio.toFixed(2)}%/yr</span>`;
+}
+
+function _cagr(v) {
+  if (v == null) return '<span class="muted">—</span>';
+  return `<span class="${v >= 0 ? 'r-pos' : 'r-neg'}">${v >= 0 ? '+' : ''}${v}%</span>`;
+}
+
+function _fundCard(f) {
+  const m = f.metrics || {};
+  const name = m.name || f.symbol;
+  const isAdded = !!f.added_at;
+  const rmBtn = isAdded
+    ? `<button class="fund-rm" data-sym="${esc(f.symbol)}" title="Remove from portfolio">✕</button>`
+    : '';
+  return `
+    <div class="fund-card" id="fc-${esc(f.symbol)}">
+      <div class="fund-card-head">
+        <div>
+          <span class="fund-sym">${esc(f.symbol)}</span>
+          <span class="fund-name">${esc(name)}</span>
+          ${m.category ? `<span class="fund-cat">${esc(m.category)}</span>` : ''}
+        </div>
+        <div class="fund-card-actions">
+          ${rmBtn}
+        </div>
+      </div>
+      <div class="fund-metrics">
+        <div class="fund-metric"><div class="fm-val">${_expBadge(m.expense_ratio)}</div><div class="fm-lbl">Expense ratio</div></div>
+        <div class="fund-metric"><div class="fm-val">${_cagr(m.cagr_1y)}</div><div class="fm-lbl">1Y CAGR</div></div>
+        <div class="fund-metric"><div class="fm-val">${_cagr(m.cagr_3y)}</div><div class="fm-lbl">3Y CAGR</div></div>
+        <div class="fund-metric"><div class="fm-val">${_cagr(m.cagr_5y)}</div><div class="fm-lbl">5Y CAGR</div></div>
+        <div class="fund-metric"><div class="fm-val">${_cagr(m.since_inception_cagr)}</div><div class="fm-lbl">Since inception</div></div>
+      </div>
+      <button class="fund-detail-btn" data-sym="${esc(f.symbol)}">Details ▾</button>
+      <div class="fund-detail-panel" id="fdp-${esc(f.symbol)}" style="display:none"></div>
+    </div>`;
+}
+
+async function _toggleFundDetail(sym) {
+  const panel = document.getElementById('fdp-' + sym);
+  if (!panel) return;
+  if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  if (panel.dataset.loaded) return;
+  panel.innerHTML = '<div class="loading">Loading…</div>';
+  try {
+    const d = await getJSON('/api/funds/' + encodeURIComponent(sym));
+    const holdings = (d.holdings || []).map(h =>
+      `<tr><td>${esc(h.ticker || '—')}</td><td>${esc(h.name)}</td><td class="r-pos">${h.weight}%</td></tr>`
+    ).join('');
+    const sectors = Object.entries(d.sector_weights || {})
+      .sort((a, b) => b[1] - a[1]).slice(0, 6)
+      .map(([k, v]) => `<div class="sector-row"><span>${esc(k)}</span><span>${v.toFixed(1)}%</span></div>`)
+      .join('');
+    const inception = d.metrics.inception_date
+      ? `<p class="muted" style="font-size:12px">Inception: ${esc(d.metrics.inception_date)}</p>` : '';
+    panel.innerHTML = `
+      <div class="fund-detail-inner">
+        ${inception}
+        <div class="fund-detail-cols">
+          ${holdings ? `<div><h5>Top holdings</h5><table class="mini">${holdings}</table></div>` : ''}
+          ${sectors ? `<div><h5>Sector weights</h5>${sectors}</div>` : ''}
+        </div>
+        ${d.data_notes.length ? `<p class="muted" style="font-size:12px">${esc(d.data_notes.join(' · '))}</p>` : ''}
+      </div>`;
+    panel.dataset.loaded = '1';
+  } catch (e) {
+    panel.innerHTML = `<div class="loading">Could not load: ${esc(e.message)}</div>`;
+  }
+}
+
+async function _addFund() {
+  const inp = document.getElementById('fundSymInput');
+  const sym = (inp.value || '').trim().toUpperCase().split(' ')[0];
+  if (!sym) return;
+  if (!_currentUser) { showAuth(); return; }
+  inp.disabled = true;
+  $('#status').textContent = `Adding ${sym}…`;
+  try {
+    await postJSON('/api/funds', { symbol: sym });
+    inp.value = '';
+    await loadFunds();
+    $('#status').textContent = `${sym} added to your fund portfolio.`;
+  } catch (e) {
+    if (e.auth) { _currentUser = null; updateAuthUI(); showAuth(); return; }
+    $('#status').textContent = 'Could not add fund: ' + e.message;
+  } finally {
+    inp.disabled = false;
+  }
+}
+
+async function _removeFund(sym) {
+  try {
+    await fetch('/api/funds/' + encodeURIComponent(sym), { method: 'DELETE' });
+    const card = document.getElementById('fc-' + sym);
+    if (card) card.remove();
+    $('#status').textContent = `${sym} removed.`;
+  } catch (e) {
+    if (e.auth) { _currentUser = null; updateAuthUI(); showAuth(); }
+    else $('#status').textContent = 'Remove failed: ' + e.message;
+  }
+}
+
+async function _runCompare() {
+  const a = (document.getElementById('cmpA').value || '').trim().toUpperCase();
+  const b = (document.getElementById('cmpB').value || '').trim().toUpperCase();
+  if (!a || !b) { $('#status').textContent = 'Enter two fund symbols to compare.'; return; }
+  const out = document.getElementById('compareOut');
+  out.innerHTML = '<div class="loading">Comparing…</div>';
+  try {
+    const d = await getJSON(`/api/funds/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`);
+    const fa = d.fund_a, fb = d.fund_b;
+    const rows = [
+      ['Expense ratio', _expBadge(fa.expense_ratio), _expBadge(fb.expense_ratio)],
+      ['1Y CAGR', _cagr(fa.cagr_1y), _cagr(fb.cagr_1y)],
+      ['3Y CAGR', _cagr(fa.cagr_3y), _cagr(fb.cagr_3y)],
+      ['5Y CAGR', _cagr(fa.cagr_5y), _cagr(fb.cagr_5y)],
+      ['Since inception', _cagr(fa.since_inception_cagr), _cagr(fb.since_inception_cagr)],
+      ['Inception date', esc(fa.inception_date || '—'), esc(fb.inception_date || '—')],
+      ['Category', esc(fa.category || '—'), esc(fb.category || '—')],
+    ].map(([l, va, vb]) => `<tr><td class="muted">${l}</td><td>${va}</td><td>${vb}</td></tr>`).join('');
+
+    const sharedRows = (d.shared || []).slice(0, 10).map(h =>
+      `<tr><td>${esc(h.ticker || '—')}</td><td>${esc(h.name)}</td><td>${h.weight_a}%</td><td>${h.weight_b}%</td></tr>`
+    ).join('');
+
+    out.innerHTML = `
+      <div class="cmp-result">
+        <table class="mini cmp-table">
+          <thead><tr><th>Metric</th><th>${esc(fa.symbol)} · ${esc(fa.name)}</th><th>${esc(fb.symbol)} · ${esc(fb.name)}</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="cmp-overlap">
+          <h5>Holdings overlap — ${d.overlap_count} shared</h5>
+          <p class="muted" style="font-size:12px">
+            Overlap weight: ${esc(a)} ${d.overlap_weight_a}% · ${esc(b)} ${d.overlap_weight_b}%
+          </p>
+          ${sharedRows ? `<table class="mini"><thead><tr><th>Ticker</th><th>Name</th><th>${esc(a)} wt</th><th>${esc(b)} wt</th></tr></thead><tbody>${sharedRows}</tbody></table>` : '<p class="muted">No shared holdings found (yfinance returns top-10 only).</p>'}
+        </div>
+      </div>`;
+  } catch (e) {
+    out.innerHTML = `<div class="loading">Compare failed: ${esc(e.message)}</div>`;
+  }
+}
+
+async function loadFunds() {
+  $('#highlights').innerHTML = '';
+  $('#status').textContent = 'Fund Tracker — add ETFs &amp; mutual funds to compare and track.';
+
+  const addBar = `
+    <div class="fund-add-bar">
+      <input id="fundSymInput" placeholder="Ticker e.g. SPY, QQQ, VTI…" maxlength="20" autocomplete="off" />
+      <button id="fundAddBtn">+ Add fund</button>
+    </div>`;
+
+  let portfolioHtml = '';
+  if (_currentUser) {
+    try {
+      const items = await getJSON('/api/funds');
+      if (items.length) {
+        portfolioHtml = `<div class="fund-grid">${items.map(f => _fundCard(f)).join('')}</div>`;
+      } else {
+        portfolioHtml = '<div class="empty">No funds tracked yet. Add one above.</div>';
+      }
+    } catch (e) {
+      if (e.auth) { _currentUser = null; updateAuthUI(); }
+      portfolioHtml = '<div class="empty">Could not load portfolio.</div>';
+    }
+  } else {
+    portfolioHtml = `
+      <div class="empty signin-gate">
+        <p>📊 Track your fund portfolio here.</p>
+        <p class="muted">Sign in (free) to add funds and track them across sessions.</p>
+        <button id="fundSignIn" class="auth-submit" style="max-width:240px;margin:14px auto 0">Sign in to track funds</button>
+      </div>`;
+  }
+
+  const compareSection = `
+    <div class="cmp-section">
+      <h4>Compare two funds</h4>
+      <div class="cmp-inputs">
+        <input id="cmpA" placeholder="Fund A e.g. SPY" maxlength="10" />
+        <span class="muted">vs</span>
+        <input id="cmpB" placeholder="Fund B e.g. QQQ" maxlength="10" />
+        <button id="cmpBtn">Compare</button>
+      </div>
+      <div id="compareOut"></div>
+    </div>`;
+
+  $('#content').innerHTML = addBar + '<h4 style="padding:0 0 8px">My tracked funds</h4>' + portfolioHtml + compareSection;
+
+  document.getElementById('fundAddBtn').addEventListener('click', _addFund);
+  document.getElementById('fundSymInput').addEventListener('keydown', e => { if (e.key === 'Enter') _addFund(); });
+  document.getElementById('cmpBtn').addEventListener('click', _runCompare);
+
+  const fundSignIn = document.getElementById('fundSignIn');
+  if (fundSignIn) fundSignIn.addEventListener('click', () => showAuth());
+
+  $('#content').querySelectorAll('.fund-detail-btn').forEach(btn =>
+    btn.addEventListener('click', () => _toggleFundDetail(btn.dataset.sym)));
+  $('#content').querySelectorAll('.fund-rm').forEach(btn =>
+    btn.addEventListener('click', () => _removeFund(btn.dataset.sym)));
+}
+
+// Wire funds into the view system
+VIEWS.funds = loadFunds;
+
+// Refresh funds on login so the portfolio appears immediately
+const _onLoggedIn_prev = onLoggedIn;
+onLoggedIn = function(user) {
+  _onLoggedIn_prev(user);
+  if (view === 'funds') loadFunds();
+};

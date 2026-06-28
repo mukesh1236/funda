@@ -417,6 +417,101 @@ table.mini.wide td:last-child { width: 120px; }
   border: none; border-radius: 8px; font-size: 15px; font-weight: 600;
   cursor: pointer; transition: opacity .15s;
 }
+
+/* ── Fund Tracker ────────────────────────────────────────────────────────────── */
+.fund-add-bar {
+  display: flex; gap: 10px; align-items: center; margin-bottom: 18px;
+}
+.fund-add-bar input {
+  flex: 1; max-width: 280px;
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 9px 13px; font-size: 13px;
+}
+.fund-add-bar input:focus { outline: none; border-color: var(--accent); }
+.fund-add-bar button {
+  background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
+}
+
+.fund-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px; margin-bottom: 28px;
+}
+
+.fund-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 14px; padding: 18px 20px;
+}
+.fund-card-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  margin-bottom: 14px;
+}
+.fund-sym { font-size: 17px; font-weight: 700; margin-right: 8px; }
+.fund-name { font-size: 13px; color: var(--muted); }
+.fund-cat {
+  display: inline-block; margin-left: 6px;
+  background: var(--panel-2); border-radius: 6px;
+  padding: 2px 7px; font-size: 11px; color: var(--dim);
+}
+.fund-card-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.fund-rm {
+  background: transparent; border: 1px solid var(--border);
+  color: var(--muted); border-radius: 6px; padding: 3px 8px;
+  font-size: 12px; cursor: pointer;
+}
+.fund-rm:hover { color: var(--sell); border-color: var(--sell); background: transparent; }
+
+.fund-metrics {
+  display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px;
+}
+.fund-metric { text-align: center; min-width: 62px; }
+.fm-val { font-size: 14px; font-weight: 600; }
+.fm-lbl { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+.exp-badge { padding: 2px 7px; border-radius: 6px; font-size: 12px; font-weight: 600; }
+.exp-green { background: rgba(34,197,94,.15); color: var(--buy); }
+.exp-amber { background: rgba(234,179,8,.15); color: var(--hold); }
+.exp-red { background: rgba(239,68,68,.15); color: var(--sell); }
+
+.fund-detail-btn {
+  background: transparent; border: 1px solid var(--border);
+  color: var(--muted); border-radius: 6px;
+  padding: 4px 10px; font-size: 12px; cursor: pointer; width: 100%;
+}
+.fund-detail-btn:hover { color: var(--text); border-color: var(--accent); background: transparent; }
+
+.fund-detail-panel { margin-top: 12px; }
+.fund-detail-inner { padding-top: 8px; border-top: 1px solid var(--border); }
+.fund-detail-cols {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 10px;
+}
+@media (max-width: 600px) { .fund-detail-cols { grid-template-columns: 1fr; } }
+.fund-detail-inner h5 { margin: 0 0 8px; font-size: 12px; color: var(--muted); text-transform: uppercase; }
+.sector-row {
+  display: flex; justify-content: space-between;
+  font-size: 12px; padding: 3px 0; border-bottom: 1px solid var(--border);
+}
+
+/* ── Compare section ──────────────────────────────────────────────────────────── */
+.cmp-section {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 14px; padding: 20px 22px; margin-top: 8px;
+}
+.cmp-section h4 { margin: 0 0 14px; font-size: 15px; }
+.cmp-inputs {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px;
+}
+.cmp-inputs input {
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 12px; font-size: 13px; width: 120px;
+}
+.cmp-inputs input:focus { outline: none; border-color: var(--accent); }
+.cmp-inputs button { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.cmp-result { display: flex; flex-direction: column; gap: 18px; }
+.cmp-table th { min-width: 100px; }
+.cmp-overlap h5 { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
 .welcome-got-it:hover { opacity: .88; }
 
 /* Today's movers */

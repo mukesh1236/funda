@@ -467,3 +467,58 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
+
+
+# ── Fund Tracker ──────────────────────────────────────────────────────────────
+
+class FundHolding(BaseModel):
+    ticker: Optional[str] = None
+    name: str
+    weight: float
+
+
+class FundMetrics(BaseModel):
+    symbol: str
+    name: str
+    category: Optional[str] = None
+    expense_ratio: Optional[float] = None       # already in %
+    inception_date: Optional[str] = None
+    years_since_inception: Optional[float] = None
+    since_inception_cagr: Optional[float] = None
+    total_return_pct: Optional[float] = None
+    cagr_1y: Optional[float] = None
+    cagr_3y: Optional[float] = None
+    cagr_5y: Optional[float] = None
+
+
+class FundDetail(BaseModel):
+    metrics: FundMetrics
+    holdings: List[FundHolding]
+    sector_weights: Dict[str, float] = {}
+    data_notes: List[str] = []
+
+
+class FundPortfolioItem(BaseModel):
+    symbol: str
+    added_at: str
+    metrics: Optional[FundMetrics] = None
+
+
+class FundCompareResult(BaseModel):
+    fund_a: FundMetrics
+    fund_b: FundMetrics
+    overlap_count: int
+    overlap_weight_a: float     # sum of shared weights from fund A's perspective
+    overlap_weight_b: float
+    shared: List[Dict] = []     # [{name, ticker, weight_a, weight_b}]
+    only_a: List[FundHolding] = []
+    only_b: List[FundHolding] = []
+
+
+class FundAddRequest(BaseModel):
+    symbol: str
+
+    @field_validator("symbol")
+    @classmethod
+    def _sym(cls, v: str) -> str:
+        return normalize_symbol(v)

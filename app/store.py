@@ -100,6 +100,14 @@ CREATE TABLE IF NOT EXISTS metrics_daily (
     hits     INTEGER NOT NULL DEFAULT 0,   -- app page loads that day
     visitors INTEGER NOT NULL DEFAULT 0    -- first-time (new-cookie) visitors
 );
+
+CREATE TABLE IF NOT EXISTS fund_portfolio (
+    id       INTEGER PRIMARY KEY,
+    user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    symbol   TEXT NOT NULL COLLATE NOCASE,
+    added_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(user_id, symbol)
+);
 """
 
 
@@ -478,6 +486,34 @@ class RecommendationStore:
                 "SELECT DISTINCT grp FROM watchlist WHERE user_id = ? ORDER BY grp",
                 (user_id,)).fetchall()
         return [r["grp"] for r in rows]
+
+    # ── fund portfolio ───────────────────────────────────────────────────────────
+    def add_fund(self, user_id: int, symbol: str) -> bool:
+        """Pin a fund to the user's portfolio. Returns False if already tracked."""
+        with _write_lock, self._connect() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO fund_portfolio (user_id, symbol) VALUES (?, ?)",
+                (user_id, symbol.upper()),
+            )
+            return bool(cur.rowcount)
+
+    def remove_fund(self, user_id: int, symbol: str) -> bool:
+        """Remove a fund from the user's portfolio. Returns False if not found."""
+        with _write_lock, self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM fund_portfolio WHERE user_id = ? AND symbol = ? COLLATE NOCASE",
+                (user_id, symbol.upper()),
+            )
+            return bool(cur.rowcount)
+
+    def list_fund_portfolio(self, user_id: int) -> List[dict]:
+        """Return [{symbol, added_at}] for the user's tracked funds, newest first."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT symbol, added_at FROM fund_portfolio WHERE user_id = ? ORDER BY added_at DESC",
+                (user_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def outcome_counts(self, symbol: str) -> dict:
         """{status: count} of resolved outcomes for a symbol — feeds hit-rate."""

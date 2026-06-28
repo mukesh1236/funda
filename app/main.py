@@ -60,6 +60,7 @@ from app.auth import (
     verify_password,
 )
 from app.store import RecommendationStore
+from app.funds import router as funds_router
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -408,6 +409,8 @@ def refresh(background_tasks: BackgroundTasks):
                 "Refresh the feed in ~30–60s.",
     )
 
+
+app.include_router(funds_router)
 
 # ── Static dashboard ──────────────────────────────────────────────────────────
 # Mounted last so /api routes take precedence. Serves web/index.html at "/".

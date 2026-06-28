@@ -253,6 +253,83 @@ def _prompt(question: str, market: str, feed: str, lb: str, sym_ctx: str) -> str
     )
 
 
+# ── fund context injection ────────────────────────────────────────────────────
+
+_FUND_KEYWORDS = frozenset({
+    "etf", "fund", "expense ratio", "expense", "holdings", "sector",
+    "cagr", "inception", "return", "performance", "fees", "nav",
+    "vanguard", "ishares", "invesco", "schwab", "fidelity", "blackrock",
+})
+
+_KNOWN_FUND_SYMBOLS = frozenset({
+    "SPY", "VOO", "QQQ", "VTI", "IVV", "VUG", "SCHD", "GLD", "TLT",
+    "FXAIX", "VFIAX", "FCNTX", "VTSAX", "SWTSX", "FSKAX",
+    "AGG", "BND", "VNQ", "XLF", "XLK", "XLE", "XLV", "XLI",
+})
+
+
+def _detect_fund_ticker(question: str) -> Optional[str]:
+    """Return a fund symbol if the question seems to be about a fund."""
+    q = question.upper()
+    ql = question.lower()
+
+    # Exact fund symbol match
+    for sym in _KNOWN_FUND_SYMBOLS:
+        if re.search(r"\b" + re.escape(sym) + r"\b", q):
+            return sym
+
+    # Generic fund keyword: try to extract a ticker token from the question
+    if any(kw in ql for kw in _FUND_KEYWORDS):
+        toks = re.findall(r"\b([A-Z]{2,6})\b", q)
+        for tok in toks:
+            if tok not in _COMMON_WORDS:
+                return tok  # best guess: first uppercase word not a common word
+
+    return None
+
+
+def _build_fund_context(symbol: str) -> str:
+    """Build a structured context block from live yfinance data."""
+    try:
+        from app.fund_data import get_fund_info, get_fund_performance
+
+        info = get_fund_info(symbol)
+        if not info:
+            return ""
+        perf = get_fund_performance(symbol) or {}
+
+        parts = [f"FUND DATA for {symbol} ({info.get('name', symbol)}):"]
+        if info.get("category"):
+            parts.append(f"Category: {info['category']}")
+        if info.get("expense_ratio") is not None:
+            parts.append(f"Expense ratio: {info['expense_ratio']}% per year")
+        if perf.get("inception_date"):
+            parts.append(f"Inception: {perf['inception_date']}")
+        if perf.get("since_inception_cagr") is not None:
+            parts.append(f"CAGR since inception: {perf['since_inception_cagr']}%")
+        if perf.get("total_return_pct") is not None:
+            parts.append(f"Total return since inception: {perf['total_return_pct']}%")
+        for label, key in [("1Y CAGR", "cagr_1y"), ("3Y CAGR", "cagr_3y"), ("5Y CAGR", "cagr_5y")]:
+            if perf.get(key) is not None:
+                parts.append(f"{label}: {perf[key]}%")
+        holdings = info.get("holdings", [])
+        if holdings:
+            h_text = ", ".join(
+                f"{h.get('name') or h.get('ticker', '?')} {h.get('weight', 0):.1f}%"
+                for h in holdings[:5]
+            )
+            parts.append(f"Top 5 holdings: {h_text}")
+        sectors = info.get("sector_weights", {})
+        if sectors:
+            top_s = sorted(sectors.items(), key=lambda x: x[1], reverse=True)[:3]
+            s_text = ", ".join(f"{k} {v:.1f}%" for k, v in top_s)
+            parts.append(f"Top sectors: {s_text}")
+        return "\n".join(parts)
+    except Exception as e:
+        logger.debug("_build_fund_context(%s): %s", symbol, e)
+        return ""
+
+
 # ── entry point ───────────────────────────────────────────────────────────────
 def answer_question(
     store: RecommendationStore,
@@ -263,6 +340,36 @@ def answer_question(
 ) -> Tuple[Optional[str], Optional[str]]:
     """Return (answer, error). Always tries to answer from data; the LLM is an
     enhancement for open-ended questions, never a hard dependency."""
+    # 0) Fund-specific question — inject live fund data + RAG context first.
+    fund_sym = _detect_fund_ticker(question)
+    fund_context = ""
+    if fund_sym:
+        fund_context = _build_fund_context(fund_sym)
+        if fund_context and settings.summary_provider in _LLM_PROVIDERS:
+            # Pull extra context from the RAG index if available.
+            try:
+                from app.fund_rag import query_fund_docs
+                rag_ctx = query_fund_docs(fund_sym, question)
+                if rag_ctx:
+                    fund_context += "\n\nFund document context:\n" + rag_ctx
+            except Exception as e:
+                logger.debug("RAG query skipped: %s", e)
+
+            fund_prompt = (
+                "You are a fund data assistant. Answer using ONLY the data below.\n"
+                "Be concise (2-4 sentences). Cite numbers from the data.\n"
+                "Do not give investment advice.\n\n"
+                f"{fund_context}\n\n"
+                f"QUESTION: {question}\n\nANSWER:"
+            )
+            answer = generate_narrative(fund_prompt, settings, timeout=30)
+            if answer:
+                return answer, None
+
+        # Return the fund context as a structured answer when LLM is off.
+        if fund_context:
+            return fund_context, None
+
     # 1) Deterministic answer for common, structured questions (free, instant).
     rule = _rule_answer(store, market, question, symbol)
     if rule:
