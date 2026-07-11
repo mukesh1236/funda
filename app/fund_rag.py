@@ -15,6 +15,7 @@ or faiss-cpu are not installed, so the feature degrades silently.
 import json
 import logging
 import threading
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -43,10 +44,16 @@ def _chunk(text: str) -> List[str]:
     return chunks
 
 
-def _embed(texts: List[str]):
+@lru_cache(maxsize=1)
+def _model():
+    """Load the embedding model once per process — constructing
+    SentenceTransformer per call costs seconds of disk load each time."""
     from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer(_EMBED_MODEL)
-    return model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+    return SentenceTransformer(_EMBED_MODEL)
+
+
+def _embed(texts: List[str]):
+    return _model().encode(texts, normalize_embeddings=True, show_progress_bar=False)
 
 
 def _synthesize(symbol: str) -> str:

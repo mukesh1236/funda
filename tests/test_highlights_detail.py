@@ -40,26 +40,32 @@ def con(symbol, buy, sell, total, sources=("yahoo",), target=None):
                         avg_target=target, sources=list(sources))
 
 
+class _EmptyStore:
+    """Minimal store stub — _highlights only needs list_recent (for catalysts)."""
+    def list_recent(self, days=1):
+        return []
+
+
 def test_highlights_picks_buzz_buy_sell():
     stocks = [
         con("AMZN", 60, 0, 60),
         con("TSLA", 5, 12, 25),    # net sell
         con("NVDA", 40, 1, 80, sources=("yahoo", "finnhub")),  # most analysts
     ]
-    h = _highlights(stocks)
+    h = _highlights(stocks, _EmptyStore())
     assert h.most_buzzed.symbol == "NVDA"   # highest total_count
     assert h.top_buy.symbol == "AMZN"       # highest score (+60)
     assert h.top_sell.symbol == "TSLA"      # lowest score (-7)
 
 
 def test_highlights_no_sell_when_all_positive():
-    h = _highlights([con("AMZN", 10, 0, 10), con("MSFT", 5, 0, 5)])
+    h = _highlights([con("AMZN", 10, 0, 10), con("MSFT", 5, 0, 5)], _EmptyStore())
     assert h.top_sell is None
     assert h.top_buy.symbol == "AMZN"
 
 
 def test_highlights_empty():
-    h = _highlights([])
+    h = _highlights([], _EmptyStore())
     assert h.most_buzzed is None and h.top_buy is None and h.top_sell is None
 
 

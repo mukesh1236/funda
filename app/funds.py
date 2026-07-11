@@ -10,6 +10,7 @@ Routes (all under /api/funds):
 """
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -128,15 +129,21 @@ def compare_funds(
     except ValueError as e:
         raise HTTPException(422, detail=str(e))
 
-    metrics_a = _build_metrics(sym_a)
-    metrics_b = _build_metrics(sym_b)
+    # Four independent network fetches — run them concurrently instead of
+    # stacking metrics A → metrics B → holdings A → holdings B latencies.
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_ma = ex.submit(_build_metrics, sym_a)
+        f_mb = ex.submit(_build_metrics, sym_b)
+        f_h1 = ex.submit(get_fund_holdings, sym_a)
+        f_h2 = ex.submit(get_fund_holdings, sym_b)
+        metrics_a, metrics_b = f_ma.result(), f_mb.result()
+        h1, h2 = f_h1.result(), f_h2.result()
+
     if metrics_a is None:
         raise HTTPException(404, detail=f"No data found for {sym_a}. Check the ticker.")
     if metrics_b is None:
         raise HTTPException(404, detail=f"No data found for {sym_b}. Check the ticker.")
 
-    h1 = get_fund_holdings(sym_a)
-    h2 = get_fund_holdings(sym_b)
     ov = _compare_holdings(h1, h2)
 
     return FundCompareResult(
@@ -155,16 +162,16 @@ def compare_funds(
 def list_funds(user: dict = Depends(get_current_user)):
     """List the logged-in user's tracked funds with cached metrics."""
     rows = _store.list_fund_portfolio(user["id"])
-    items = []
-    for row in rows:
-        sym = row["symbol"]
-        metrics = _build_metrics(sym)
-        items.append(FundPortfolioItem(
-            symbol=sym,
-            added_at=row["added_at"],
-            metrics=metrics,
-        ))
-    return items
+    if not rows:
+        return []
+    # Build metrics for all funds concurrently — serially this was one
+    # yfinance round-trip per portfolio item.
+    with ThreadPoolExecutor(max_workers=min(8, len(rows))) as ex:
+        metrics_list = list(ex.map(lambda r: _build_metrics(r["symbol"]), rows))
+    return [
+        FundPortfolioItem(symbol=row["symbol"], added_at=row["added_at"], metrics=m)
+        for row, m in zip(rows, metrics_list)
+    ]
 
 
 @router.post("", response_model=FundPortfolioItem, status_code=201)

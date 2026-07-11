@@ -95,18 +95,22 @@ def _enrich(
     return c
 
 
-_DAY_CHANGE_CACHE: Dict[str, Tuple[float, Dict[str, float]]] = {}  # market → (ts, result)
+# Keyed by the actual symbol set, not just the market: keying by market alone
+# let a theme-filtered request poison the cache with a subset of symbols for
+# every other request's 5 minutes.
+_DAY_CHANGE_CACHE: Dict[frozenset, Tuple[float, Dict[str, float]]] = {}
 _DAY_CHANGE_TTL = 300  # 5 minutes — fast enough for intraday, cheap on yfinance
 
 
 def _batch_day_changes(symbols: List[str], market: str = "us") -> Dict[str, float]:
     """Fetch today's % price change for a list of symbols in one yfinance call.
-    Cached 5 minutes per market so rapid user refreshes don't hammer yfinance.
-    Returns {SYMBOL: pct_change}. Silently returns {} on any failure."""
+    Cached 5 minutes per symbol-set so rapid user refreshes don't hammer
+    yfinance. Returns {SYMBOL: pct_change}. Silently returns {} on any failure."""
     if not symbols:
         return {}
+    key = frozenset(s.upper() for s in symbols)
     now = time.time()
-    cached = _DAY_CHANGE_CACHE.get(market)
+    cached = _DAY_CHANGE_CACHE.get(key)
     if cached and now - cached[0] < _DAY_CHANGE_TTL:
         return cached[1]
     try:
@@ -126,7 +130,7 @@ def _batch_day_changes(symbols: List[str], market: str = "us") -> Dict[str, floa
                         result[sym.upper()] = round((today_c - prev) / prev * 100, 2)
             except Exception:
                 pass
-        _DAY_CHANGE_CACHE[market] = (now, result)
+        _DAY_CHANGE_CACHE[key] = (now, result)
         return result
     except Exception as e:
         logger.info("batch day-change fetch failed: %s", e)
@@ -144,9 +148,11 @@ def build_feed(
     theme_filter = {t.upper() for t in tickers_for(theme, market=market)} if theme else None
 
     by_symbol: dict[str, list] = {}
+    market_symbols: set = set()   # every symbol in this market, pre-theme-filter
     for r in recs:
         if market_of(r.symbol) != market:
             continue
+        market_symbols.add(r.symbol)
         if theme_filter is not None and r.symbol.upper() not in theme_filter:
             continue
         by_symbol.setdefault(r.symbol, []).append(r)
@@ -169,7 +175,9 @@ def build_feed(
     stocks.sort(key=lambda c: (c.consensus_score, c.total_count), reverse=True)
 
     # Enrich with live today's price change (one batch yfinance call).
-    day_changes = _batch_day_changes([s.symbol for s in stocks], market=market)
+    # Fetch for the whole market's symbols — not just the theme-filtered subset —
+    # so every theme view within the TTL shares one warm cache entry.
+    day_changes = _batch_day_changes(sorted(market_symbols), market=market)
     for s in stocks:
         s.day_change_pct = day_changes.get(s.symbol.upper())
 
@@ -365,8 +373,19 @@ def build_detail(
         )
         for r in recs
     ]
-    news = [NewsItem(**n) for n in get_news(symbol)]
-    own = fetch_ownership(symbol)
+    # The four enrichment fetches are independent network calls — run them
+    # concurrently instead of stacking their latencies end to end.
+    from app.sources.sec_insider import fetch_insider_trades
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_news = ex.submit(get_news, symbol)
+        f_own = ex.submit(fetch_ownership, symbol)
+        f_fund = ex.submit(fetch_fundamentals, symbol)
+        f_trades = ex.submit(fetch_insider_trades, symbol)
+        news_raw, own, fmap, raw_trades = (
+            f_news.result(), f_own.result(), f_fund.result(), f_trades.result()
+        )
+
+    news = [NewsItem(**n) for n in news_raw]
     ownership = Ownership(
         inst_pct=own.get("inst_pct"), insider_pct=own.get("insider_pct"),
         fund_holders=own.get("fund_holders"),
@@ -374,7 +393,6 @@ def build_detail(
         funds=[Holder(**h) for h in own.get("funds", [])[:8]],
         recent_buyers=[Holder(**h) for h in own.get("recent_buyers", [])[:6]],
     )
-    fmap = fetch_fundamentals(symbol)
     fundamentals = Fundamentals(
         pe_ratio=fmap.get("pe_ratio"), forward_pe=fmap.get("forward_pe"),
         peg_ratio=fmap.get("peg_ratio"), eps=fmap.get("eps"),
@@ -388,8 +406,6 @@ def build_detail(
     ) if fmap else None
 
     from app.models import InsiderTrade
-    from app.sources.sec_insider import fetch_insider_trades
-    raw_trades = fetch_insider_trades(symbol)
     insider_trades = [InsiderTrade(**t) for t in raw_trades]
 
     detail = StockDetailResult(
