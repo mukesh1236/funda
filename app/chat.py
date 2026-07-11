@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 _MAX_FEED = 40        # cap LLM context size to stay within free-tier limits
 _MAX_LB = 20
 _MAX_NAMED = 12
-_LLM_PROVIDERS = ("gemini", "ollama", "auto")
+_LLM_PROVIDERS = ("gemini", "grok", "ollama", "auto")
 
 
 # ── shared formatting ─────────────────────────────────────────────────────────
@@ -91,10 +91,10 @@ def _stock_answer(store: RecommendationStore, symbol: str, stocks: list) -> str:
 
 
 def _rule_answer(
-    store: RecommendationStore, market: str, question: str, symbol: Optional[str]
+    store: RecommendationStore, market: str, question: str, symbol: Optional[str],
+    feed,
 ) -> Optional[str]:
     q = question.lower()
-    feed = build_feed(store, days=30, market=market)
     rated = [s for s in feed.stocks if s.total_count > 0]
 
     # Specific stock (passed in, or mentioned in the question)
@@ -163,8 +163,7 @@ def _rule_answer(
     return None   # open-ended → let the LLM (or overview) handle it
 
 
-def _overview(store: RecommendationStore, market: str) -> str:
-    feed = build_feed(store, days=30, market=market)
+def _overview(feed) -> str:
     rated = [s for s in feed.stocks if s.total_count > 0][:5]
     if not rated:
         return "No analyst-rated stocks are in the feed yet for this market."
@@ -177,8 +176,7 @@ def _overview(store: RecommendationStore, market: str) -> str:
 
 
 # ── LLM context (open-ended questions) ────────────────────────────────────────
-def _fmt_feed(store: RecommendationStore, market: str) -> str:
-    feed = build_feed(store, days=30, market=market)
+def _fmt_feed(feed) -> str:
     lines = []
     for s in feed.stocks[:_MAX_FEED]:
         conf = f"{s.confidence.label}({round(s.confidence.score)})" if s.confidence else "—"
@@ -273,17 +271,20 @@ def _detect_fund_ticker(question: str) -> Optional[str]:
     q = question.upper()
     ql = question.lower()
 
-    # Exact fund symbol match
+    # Exact fund symbol match (case-insensitive — the whitelist is safe).
     for sym in _KNOWN_FUND_SYMBOLS:
         if re.search(r"\b" + re.escape(sym) + r"\b", q):
             return sym
 
-    # Generic fund keyword: try to extract a ticker token from the question
+    # Generic fund keyword: extract a ticker token from the ORIGINAL question.
+    # Only words the user actually typed in uppercase count — matching against
+    # the uppercased question would turn every word ("WHAT", "BEST") into a
+    # ticker candidate and hijack ordinary questions into the fund path.
     if any(kw in ql for kw in _FUND_KEYWORDS):
-        toks = re.findall(r"\b([A-Z]{2,6})\b", q)
+        toks = re.findall(r"\b([A-Z]{2,6})\b", question)
         for tok in toks:
             if tok not in _COMMON_WORDS:
-                return tok  # best guess: first uppercase word not a common word
+                return tok
 
     return None
 
@@ -370,19 +371,24 @@ def answer_question(
         if fund_context:
             return fund_context, None
 
+    # Build the feed ONCE per question — it's the priciest input and was
+    # previously rebuilt by the rule engine, the LLM context, symbol detection,
+    # and the overview fallback (up to 4 times per chat request).
+    feed = build_feed(store, days=30, market=market)
+
     # 1) Deterministic answer for common, structured questions (free, instant).
-    rule = _rule_answer(store, market, question, symbol)
+    rule = _rule_answer(store, market, question, symbol, feed)
     if rule:
         return rule, None
 
     # 2) Open-ended → LLM if configured and reachable.
     if settings.summary_provider in _LLM_PROVIDERS:
-        feed = _fmt_feed(store, market)
+        feed_ctx = _fmt_feed(feed)
         lb = _fmt_leaderboard(store, market)
         # include stock context even when symbol comes from question text
-        detected = symbol or _detect_symbol(question, build_feed(store, days=30, market=market).stocks)
+        detected = symbol or _detect_symbol(question, feed.stocks)
         sym_ctx = _fmt_symbol(store, detected) if detected else ""
-        prompt = _prompt(question, market, feed, lb, sym_ctx)
+        prompt = _prompt(question, market, feed_ctx, lb, sym_ctx)
         answer = generate_narrative(prompt, settings, timeout=30)
         if answer:
             return answer, None
@@ -390,4 +396,4 @@ def answer_question(
         logger.info("Chat LLM unavailable (%s) — using data overview.", llm.last_gemini_error)
 
     # 3) LLM off or unavailable → graceful data overview (never a raw error).
-    return _overview(store, market), None
+    return _overview(feed), None

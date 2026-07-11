@@ -92,17 +92,19 @@ def collect(store: RecommendationStore, settings: Settings) -> int:
                 rec.entry_price = price
         return recs
 
-    inserted = 0
+    all_recs: list = []
     with ThreadPoolExecutor(max_workers=10) as ex:
         futures = {ex.submit(_fetch_symbol, s): s for s in universe}
         for f in as_completed(futures):
             sym = futures[f]
             try:
-                for rec in f.result():
-                    if store.add_recommendation(rec) is not None:
-                        inserted += 1
+                all_recs.extend(f.result())
             except Exception as e:
                 logger.warning("collect worker failed for %s: %s", sym, e)
+
+    # One transaction for the whole batch — inserting row-by-row opened a
+    # connection (and took the write lock) per recommendation.
+    inserted = store.add_recommendations(all_recs)
 
     logger.info("collect: %d new recommendations across %d symbols",
                 inserted, len(universe))
@@ -115,14 +117,25 @@ def validate(store: RecommendationStore, settings: Settings) -> int:
     horizon = settings.outcome_horizon_days
     today = date.today()
     hits = 0
-    # Cache prices per symbol within this pass.
-    price_cache: dict[str, Optional[float]] = {}
+    pending = store.pending_recommendations()
 
-    for rec in store.pending_recommendations():
+    # Prefetch prices for the distinct symbols in parallel — fetching them one
+    # at a time serialized a network round-trip per symbol.
+    price_cache: dict[str, Optional[float]] = {}
+    symbols = {rec.symbol for rec in pending}
+    if symbols:
+        with ThreadPoolExecutor(max_workers=min(8, len(symbols))) as ex:
+            futures = {ex.submit(get_current_price, s): s for s in symbols}
+            for f in as_completed(futures):
+                sym = futures[f]
+                try:
+                    price_cache[sym] = f.result()
+                except Exception as e:
+                    logger.warning("price prefetch failed for %s: %s", sym, e)
+                    price_cache[sym] = None
+
+    for rec in pending:
         price = price_cache.get(rec.symbol)
-        if price is None and rec.symbol not in price_cache:
-            price = get_current_price(rec.symbol)
-            price_cache[rec.symbol] = price
         if price is None:
             continue
         outcome = evaluate_outcome(rec, price, horizon_days=horizon, today=today)

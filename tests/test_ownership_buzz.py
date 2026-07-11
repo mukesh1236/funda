@@ -14,9 +14,15 @@ def _con(symbol, buy, total, sources=("yahoo",)):
 
 # ── top-5 buzzing ─────────────────────────────────────────────────────────────
 
+class _EmptyStore:
+    """Minimal store stub — _highlights only needs list_recent (for catalysts)."""
+    def list_recent(self, days=1):
+        return []
+
+
 def test_top_buzzed_returns_five_by_coverage():
     stocks = [_con(f"S{i}", buy=i, total=i) for i in range(1, 9)]  # totals 1..8
-    h = _highlights(stocks)
+    h = _highlights(stocks, _EmptyStore())
     syms = [s.symbol for s in h.top_buzzed]
     assert len(h.top_buzzed) == 5
     assert syms == ["S8", "S7", "S6", "S5", "S4"]   # most analysts first
@@ -24,7 +30,7 @@ def test_top_buzzed_returns_five_by_coverage():
 
 
 def test_top_buzzed_handles_few_stocks():
-    h = _highlights([_con("A", 3, 3), _con("B", 1, 1)])
+    h = _highlights([_con("A", 3, 3), _con("B", 1, 1)], _EmptyStore())
     assert [s.symbol for s in h.top_buzzed] == ["A", "B"]
 
 

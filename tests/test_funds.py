@@ -207,6 +207,10 @@ class TestFundRAG:
         pytest.importorskip("sentence_transformers", reason="sentence-transformers not installed")
 
         import app.fund_rag as rag_mod
+        try:  # model weights must be downloadable (offline/proxied CI can't)
+            rag_mod._model()
+        except Exception as e:
+            pytest.skip(f"embedding model unavailable in this environment: {e}")
         # Redirect index storage to tmp dir
         monkeypatch.setattr(rag_mod, "_INDEX_DIR", tmp_path)
         # Clear in-memory cache

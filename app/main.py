@@ -8,12 +8,15 @@ import logging
 import os
 import secrets
 import sys
+import time
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
+from cachetools import TTLCache
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
 # UTF-8 stdout on Windows so logging never hits charmap errors.
@@ -80,6 +83,22 @@ if settings.sentry_dsn:
 store = RecommendationStore(settings.recommendations_db_path)
 _scheduler = None
 
+# Short-TTL cache for the hot read endpoints. The underlying data changes once
+# a day (plus a 5-minute day-change refresh), so recomputing the feed on every
+# dashboard load was pure waste. 60s keeps "Refresh now" results visible fast.
+_RESPONSE_CACHE: TTLCache = TTLCache(maxsize=128, ttl=60)
+
+
+def _warm_feed_caches():
+    """Pre-fetch the feed for both markets so no user request ever pays the
+    cold yfinance day-change download. Runs on the scheduler every 4 minutes
+    (inside the day-change cache's 5-minute TTL)."""
+    for m in ("us", "in"):
+        try:
+            build_feed(store, days=1, market=m)
+        except Exception as e:
+            logger.debug("feed cache warm skipped for %s: %s", m, e)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -99,6 +118,14 @@ async def lifespan(app: FastAPI):
                 CronTrigger(hour=settings.daily_job_hour, minute=settings.daily_job_minute),
                 id="daily_recommendations",
                 replace_existing=True,
+            )
+            from apscheduler.triggers.interval import IntervalTrigger
+            _scheduler.add_job(
+                _warm_feed_caches,
+                IntervalTrigger(minutes=4),
+                id="warm_feed_caches",
+                replace_existing=True,
+                next_run_time=datetime.now(),  # warm immediately on startup
             )
             _scheduler.start()
             logger.info(
@@ -120,6 +147,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.middleware("http")
+async def timing(request: Request, call_next):
+    """Expose per-request latency (Server-Timing shows in browser dev tools)
+    and log anything slower than 1s so regressions are visible."""
+    start = time.perf_counter()
+    response = await call_next(request)
+    dur_ms = (time.perf_counter() - start) * 1000
+    response.headers["Server-Timing"] = f"app;dur={dur_ms:.0f}"
+    if dur_ms > 1000 and request.url.path.startswith("/api"):
+        logger.warning("slow request: %s %s → %.0f ms",
+                       request.method, request.url.path, dur_ms)
+    return response
 
 
 @app.middleware("http")
@@ -279,7 +321,13 @@ def feed(
 ):
     """Recent recommendations grouped per stock with consensus counts.
     Optional ?theme=AI filters to one segment. ?market=in for NSE stocks."""
-    return build_feed(store, days=days, theme=theme, market=market)
+    key = ("feed", days, theme, market)
+    cached = _RESPONSE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    result = build_feed(store, days=days, theme=theme, market=market)
+    _RESPONSE_CACHE[key] = result
+    return result
 
 
 @app.get("/api/recommendations/leaderboard", response_model=LeaderboardResult)
@@ -288,7 +336,13 @@ def leaderboard(
     limit: int = Query(25, ge=1, le=100),
     market: str = Query("us", pattern="^(us|in)$"),
 ):
-    return build_leaderboard(store, metric=metric, limit=limit, market=market)
+    key = ("leaderboard", metric, limit, market)
+    cached = _RESPONSE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    result = build_leaderboard(store, metric=metric, limit=limit, market=market)
+    _RESPONSE_CACHE[key] = result
+    return result
 
 
 @app.get("/api/recommendations/{symbol}", response_model=StockDetailResult)
@@ -399,10 +453,15 @@ def chat(req: ChatRequest):
     return ChatResponse(answer=answer)
 
 
+def _run_daily_and_invalidate():
+    run_daily(store, settings)
+    _RESPONSE_CACHE.clear()   # let freshly collected data show up immediately
+
+
 @app.post("/api/recommendations/refresh", response_model=RefreshResult)
 def refresh(background_tasks: BackgroundTasks):
     """Trigger a collection + validation run now, in the background."""
-    background_tasks.add_task(run_daily, store, settings)
+    background_tasks.add_task(_run_daily_and_invalidate)
     return RefreshResult(
         status="started",
         message="Fetching latest recommendations in the background. "

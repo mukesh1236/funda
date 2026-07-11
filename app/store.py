@@ -123,6 +123,13 @@ class RecommendationStore:
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        # WAL lets readers proceed while the daily job writes; NORMAL sync is
+        # safe under WAL; busy_timeout waits out contention instead of raising
+        # "database is locked". The module _write_lock only covers one process —
+        # these pragmas are what protect the multi-worker case.
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
         return conn
 
     def _init_schema(self) -> None:
@@ -175,6 +182,30 @@ class RecommendationStore:
                 ),
             )
             return cur.lastrowid if cur.rowcount else None
+
+    def add_recommendations(self, recs: List[AnalystRecommendation]) -> int:
+        """Insert many recommendations in ONE transaction/connection (the daily
+        collect run was opening a connection per row). Duplicates are ignored
+        via the dedupe index. Returns the number actually inserted."""
+        if not recs:
+            return 0
+        today = date.today().isoformat()
+        inserted = 0
+        with _write_lock, self._connect() as conn:
+            for rec in recs:
+                cur = conn.execute(
+                    """INSERT OR IGNORE INTO recommendations
+                       (symbol, source, firm, analyst, action, count, note, url,
+                        target_price, entry_price, entry_date, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        rec.symbol, rec.source, rec.firm, rec.analyst, rec.action,
+                        rec.count, rec.note, rec.url, rec.target_price,
+                        rec.entry_price, rec.entry_date, today,
+                    ),
+                )
+                inserted += cur.rowcount if cur.rowcount > 0 else 0
+        return inserted
 
     def upsert_outcome(self, outcome: RecommendationOutcome) -> None:
         if outcome.rec_id is None:
