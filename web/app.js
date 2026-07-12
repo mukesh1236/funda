@@ -53,10 +53,19 @@ function scoreBadge(n) {
   return `<span class="badge ${cls}">${n > 0 ? '+' : ''}${n}</span>`;
 }
 function countsCell(s) {
+  // Buy-vs-sell strength meter under the counts: proportional fill with a
+  // 2px surface gap between the two segments (dataviz spacer rule).
+  const total = s.buy_count + s.sell_count;
+  const meter = total > 0 ? `
+    <span class="meter" title="${s.buy_count} buy vs ${s.sell_count} sell">
+      <span class="m-buy" style="width:${(s.buy_count / total * 100).toFixed(1)}%"></span>
+      <span class="m-gap"></span>
+      <span class="m-sell" style="width:${(s.sell_count / total * 100).toFixed(1)}%"></span>
+    </span>` : '';
   return `<span class="counts">
     <span class="pill b">${s.buy_count} B</span>
     <span class="pill h">${s.hold_count} H</span>
-    <span class="pill s">${s.sell_count} S</span></span>`;
+    <span class="pill s">${s.sell_count} S</span>${meter}</span>`;
 }
 function ret(v) {
   if (v == null) return '<span class="muted">—</span>';
@@ -67,10 +76,16 @@ function confBadge(c) {
   const cls = { High: 'cf-high', Medium: 'cf-med', Low: 'cf-low' }[c.label] || 'cf-med';
   return `<span class="conf ${cls}" title="${esc(c.rationale)}">${c.label} ${Math.round(c.score)}</span>`;
 }
+const _AVATAR_HUES = [212, 158, 32, 265, 130, 350, 20, 190];   // deterministic per ticker
+function tickAvatar(sym) {
+  let h = 0;
+  for (const ch of sym) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const hue = _AVATAR_HUES[h % _AVATAR_HUES.length];
+  return `<span class="tick-avatar" style="background:hsl(${hue} 55% 38%)">${esc(sym.slice(0, 3))}</span>`;
+}
 function stockCell(s) {
-  return `<span class="caret">▶</span>
-    <span class="name">${esc(s.company_name || s.symbol)}</span>
-    <span class="tick">${esc(s.symbol)}</span> ${scoreBadge(s.consensus_score)}`;
+  return `<span class="caret">▶</span>${tickAvatar(s.symbol)}<span class="tick">${esc(s.symbol)}</span>
+    <span class="name">${esc(s.company_name || '')}</span> ${scoreBadge(s.consensus_score)}`;
 }
 function statusChip(o) {
   if (!o || !o.status) return '<span class="muted">—</span>';
@@ -1084,7 +1099,7 @@ async function _runCompare() {
 
 async function loadFunds() {
   $('#highlights').innerHTML = '';
-  $('#status').textContent = 'Fund Tracker — add ETFs &amp; mutual funds to compare and track.';
+  $('#status').textContent = 'Fund Tracker — add ETFs & mutual funds to compare and track.';
 
   const addBar = `
     <div class="fund-add-bar">
@@ -1150,3 +1165,189 @@ onLoggedIn = function(user) {
   _onLoggedIn_prev(user);
   if (view === 'funds') loadFunds();
 };
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Enterprise UI additions: SRE dashboard view, global search, refresh
+// animation, and Ask-AI suggestion chips. Additive — nothing above changes.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ── SRE dashboard (demo data until a TeamOps deployment is reachable) ────────
+function _sreSeries(n, base, jitter, spike) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    let v = base + (Math.sin(i / 3.1) + Math.sin(i / 7.7)) * jitter * 0.4
+              + (Math.random() - 0.5) * jitter;
+    if (spike && i === spike.at) v = spike.v;
+    out.push(Math.max(0, v));
+  }
+  return out;
+}
+
+function _sreLineChart(values, { fmt = (v) => v.toFixed(0), height = 74 } = {}) {
+  const w = 300, h = height, pad = 4;
+  const max = Math.max(...values) * 1.15 || 1, min = 0;
+  const x = (i) => pad + (i / (values.length - 1)) * (w - 2 * pad);
+  const y = (v) => h - pad - ((v - min) / (max - min)) * (h - 2 * pad);
+  const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const gridY = [0.25, 0.5, 0.75].map((f) =>
+    `<line class="grid" x1="${pad}" x2="${w - pad}" y1="${(h * f).toFixed(1)}" y2="${(h * f).toFixed(1)}"/>`).join('');
+  const last = values[values.length - 1];
+  return `<svg class="sre-chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img"
+       aria-label="trend, latest ${fmt(last)}">${gridY}
+    <polyline class="line" points="${pts}"/>
+    <circle cx="${x(values.length - 1).toFixed(1)}" cy="${y(last).toFixed(1)}" r="3" fill="var(--series-1)"/>
+  </svg>`;
+}
+
+function _sreHeatCell(v, max) {
+  // single-hue sequential ramp (blue), light→dark with magnitude
+  const t = max > 0 ? Math.min(1, v / max) : 0;
+  const alpha = 0.06 + t * 0.85;
+  return `<span class="cell" style="background:rgba(57,135,229,${alpha.toFixed(2)})"
+    title="${v.toFixed(2)}% errors"></span>`;
+}
+
+async function loadSRE() {
+  $('#highlights').innerHTML = '';
+  $('#status').textContent = 'Site reliability — uptime, latency, error rate, and incident flow.';
+
+  // Demo series (deterministic enough to look plausible)
+  const latency = _sreSeries(48, 640, 120, { at: 31, v: 1240 });
+  const errRate = _sreSeries(48, 0.4, 0.25, { at: 31, v: 1.9 });
+  const hourly  = _sreSeries(24, 0.35, 0.3, { at: 14, v: 1.6 });
+  const uptimePct = 99.72, uptimeSLO = 99.5;
+  const p95 = latency[latency.length - 1], p95SLO = 2000;
+  const errNow = errRate[errRate.length - 1];
+
+  const slo = (label, actual, target, pct, cls) => `
+    <div class="slo-row">
+      <div class="slo-top"><span>${label}</span>
+        <span><b>${actual}</b> <span class="muted">/ ${target}</span></span></div>
+      <div class="slo-bar"><div class="slo-fill ${cls}" style="width:${pct}%"></div></div>
+    </div>`;
+
+  const incidents = [
+    { id: 'INC-12', sev: 'sev2', title: 'funda: error rate spike', state: 'fixing',
+      owner: 'dev-2', opened: '08:14', sla: '14h left' },
+    { id: 'INC-11', sev: 'sev3', title: 'funda: latency over SLO', state: 'closed',
+      owner: 'sre-1', opened: 'yesterday', sla: 'met' },
+  ];
+  const active = incidents.filter((i) => i.state !== 'closed');
+
+  $('#content').innerHTML = `
+    <div class="sre-note">⚠ Demo data — connect a TeamOps deployment (see docs/TEAMOPS_DESIGN.md)
+      to stream live uptime, incidents, and SLOs for this app.</div>
+
+    <div class="sre-grid">
+      <div class="sre-card">
+        <h4>System uptime (30d)</h4>
+        <div class="sre-big">${uptimePct}%</div>
+        ${slo('Availability SLO', uptimePct + '%', uptimeSLO + '%',
+              Math.min(100, uptimePct / uptimeSLO * 100).toFixed(1),
+              uptimePct >= uptimeSLO ? '' : 'bad')}
+      </div>
+
+      <div class="sre-card">
+        <h4>p95 latency (48h) · ms</h4>
+        <div class="sre-big">${p95.toFixed(0)}<span class="mini"> ms</span></div>
+        ${_sreLineChart(latency)}
+        ${slo('Latency SLO', p95.toFixed(0) + 'ms', p95SLO + 'ms',
+              Math.min(100, (1 - p95 / p95SLO) * 100 + 50).toFixed(1),
+              p95 <= p95SLO ? '' : 'bad')}
+      </div>
+
+      <div class="sre-card">
+        <h4>Error rate (48h) · %</h4>
+        <div class="sre-big">${errNow.toFixed(2)}<span class="mini"> %</span></div>
+        ${_sreLineChart(errRate, { fmt: (v) => v.toFixed(2) + '%' })}
+      </div>
+
+      <div class="sre-card">
+        <h4>Errors by hour (today)</h4>
+        <div class="heat">${hourly.map((v) => _sreHeatCell(v, 1.6)).join('')}</div>
+        <div class="heat-legend">00h ${_sreHeatCell(0.1, 1.6)} low
+          ${_sreHeatCell(1.4, 1.6)} high · 23h</div>
+      </div>
+    </div>
+
+    <div class="sre-grid" style="margin-top:12px">
+      <div class="sre-card" style="grid-column: 1 / -1">
+        <h4>Incidents · ${active.length} active</h4>
+        <table class="sre-inc-table"><thead>
+          <tr><th>ID</th><th>Sev</th><th>Title</th><th>State</th><th>Owner</th><th>Opened</th><th>SLA</th></tr>
+        </thead><tbody>
+          ${incidents.map((i) => `<tr>
+            <td>${i.id}</td>
+            <td><span class="sev ${i.sev}">${i.sev.toUpperCase()}</span></td>
+            <td>${i.title}</td><td>${i.state}</td><td>${i.owner}</td>
+            <td>${i.opened}</td><td>${i.sla}</td></tr>`).join('')}
+        </tbody></table>
+      </div>
+    </div>`;
+}
+VIEWS.sre = loadSRE;
+
+// ── Global search (topbar) ───────────────────────────────────────────────────
+(function initGlobalSearch() {
+  const inp = document.getElementById('globalSearch');
+  const drop = document.getElementById('globalSearchDrop');
+  if (!inp || !drop) return;
+  let timer = null;
+
+  function close() { drop.innerHTML = ''; drop.classList.remove('open'); }
+
+  inp.addEventListener('input', () => {
+    clearTimeout(timer);
+    const q = inp.value.trim();
+    if (q.length < 2) { close(); return; }
+    timer = setTimeout(async () => {
+      try {
+        const data = await getJSON(`/api/search?q=${encodeURIComponent(q)}&market=${currentMarket()}`);
+        const hits = (data.results || []).slice(0, 8);
+        if (!hits.length) { close(); return; }
+        drop.innerHTML = hits.map((r) => `
+          <button class="search-hit" data-sym="${esc(r.symbol)}">
+            <span class="sym">${esc(r.symbol)}</span>
+            <span class="nm">${esc(r.name || '')}</span></button>`).join('');
+        drop.classList.add('open');
+        drop.querySelectorAll('.search-hit').forEach((b) =>
+          b.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            close(); inp.value = '';
+            openSymbol(b.dataset.sym);
+          }));
+      } catch (e) { close(); }
+    }, 250);
+  });
+  inp.addEventListener('blur', () => setTimeout(close, 160));
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { close(); inp.blur(); }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const first = drop.querySelector('.search-hit');
+      if (first) { close(); inp.value = ''; openSymbol(first.dataset.sym); }
+    }
+  });
+})();
+
+// ── Refresh button working animation ─────────────────────────────────────────
+(function initRefreshSpin() {
+  const btn = document.getElementById('refresh');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    btn.classList.add('working');
+    setTimeout(() => btn.classList.remove('working'), 45000);
+  });
+})();
+
+// ── Ask-AI suggestion chips ──────────────────────────────────────────────────
+(function initChatSuggest() {
+  const box = document.getElementById('chatSuggest');
+  if (!box) return;
+  box.querySelectorAll('button').forEach((b) =>
+    b.addEventListener('click', () => {
+      const input = document.getElementById('chatText');
+      input.value = b.dataset.q;
+      document.getElementById('chatForm').requestSubmit();
+    }));
+})();

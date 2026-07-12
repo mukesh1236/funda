@@ -3,118 +3,167 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Analyst Recommendation Tracker</title>
-  <link rel="stylesheet" href="/styles.css?v=17" />
+  <title>AlphaFunds — Analyst Recommendation Tracker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css?v=20" />
 </head>
 <body>
-  <header>
+<div class="app-shell">
+
+  <!-- ── Side navigation ─────────────────────────────────────────────────── -->
+  <aside class="sidenav" id="sidenav">
     <div class="brand">
       <span class="logo">📈</span>
-      <div>
-        <h1>Analyst Recommendation Tracker</h1>
-        <p class="sub">Daily buy/sell consensus &middot; target hit/miss tracking</p>
+      <div class="brand-text">
+        <div class="brand-name">AlphaFunds</div>
+        <div class="brand-sub">Analyst Tracker</div>
       </div>
     </div>
-    <div class="actions">
-      <select id="market">
-        <option value="us">🇺🇸 US stocks</option>
-        <option value="in">🇮🇳 India (NSE)</option>
-      </select>
-      <select id="theme">
-        <option value="">All segments</option>
-      </select>
-      <select id="days">
-        <option value="1">Today</option>
-        <option value="7" selected>Last 7 days</option>
-        <option value="30">Last 30 days</option>
-      </select>
-      <button id="refresh">↻ Refresh now</button>
-      <button id="signIn" class="ghost-btn" hidden>Sign in</button>
-      <div class="user-menu" id="userMenu" hidden>
-        <span class="user-name" id="userName"></span>
-        <button id="logout" class="ghost-btn" title="Log out">Log out</button>
-      </div>
-    </div>
-  </header>
 
-  <!-- Auth overlay: dismissible — browsing is free, login only to save a watchlist -->
-  <div class="auth-overlay" id="authOverlay">
-    <div class="auth-card">
-      <button class="auth-close" id="authClose" title="Close" aria-label="Close">✕</button>
-      <div class="auth-brand"><span class="logo">📈</span> Analyst Tracker</div>
-      <p class="auth-tagline">Sign in to save stocks to your own watchlist. Browsing is free.</p>
-      <div class="auth-tabs">
-        <button class="auth-tab active" data-mode="login">Log in</button>
-        <button class="auth-tab" data-mode="signup">Sign up</button>
-      </div>
-      <form id="authForm" autocomplete="on">
-        <label class="auth-field" id="nameField" hidden>
-          <span>Display name</span>
-          <input id="authName" type="text" maxlength="60" placeholder="Jane Investor" />
-        </label>
-        <label class="auth-field">
-          <span>Email</span>
-          <input id="authEmail" type="email" required placeholder="you@example.com" autocomplete="email" />
-        </label>
-        <label class="auth-field">
-          <span>Password</span>
-          <input id="authPassword" type="password" required minlength="8" placeholder="At least 8 characters" autocomplete="current-password" />
-        </label>
-        <div class="auth-error" id="authError"></div>
-        <button type="submit" class="auth-submit" id="authSubmit">Log in</button>
-        <button type="button" class="auth-forgot" id="authForgot">Forgot password?</button>
-      </form>
+    <nav class="nav-group">
+      <div class="nav-label">Markets</div>
+      <button class="tab nav-item active" data-view="feed">
+        <span class="nav-ic">◉</span> Overview
+      </button>
+      <button class="tab nav-item" data-view="leaderboard">
+        <span class="nav-ic">▤</span> Coverage &amp; Leaders
+      </button>
+      <button class="tab nav-item" data-view="watchlist">
+        <span class="nav-ic">★</span> Watchlist
+      </button>
+      <button class="tab nav-item" data-view="funds">
+        <span class="nav-ic">◫</span> Funds
+      </button>
+      <button class="tab nav-item" data-view="digest">
+        <span class="nav-ic">☰</span> Market Digest
+      </button>
+    </nav>
+
+    <nav class="nav-group">
+      <div class="nav-label">Operations</div>
+      <button class="tab nav-item" data-view="sre">
+        <span class="nav-ic">◈</span> SRE Dashboard
+      </button>
+      <button class="tab nav-item nav-admin" data-view="admin" id="adminTab" hidden>
+        <span class="nav-ic">🔒</span> Admin
+      </button>
+    </nav>
+
+    <div class="sidenav-foot">
+      <div class="live-status"><span class="live-dot" id="liveDot"></span><span id="feedUpdated">—</span></div>
     </div>
+  </aside>
+
+  <!-- ── Main column ─────────────────────────────────────────────────────── -->
+  <div class="main-col">
+
+    <header class="topbar">
+      <div class="search-wrap">
+        <span class="search-ic">⌕</span>
+        <input id="globalSearch" placeholder="Search ticker or company…" autocomplete="off" maxlength="40" />
+        <div id="globalSearchDrop" class="search-drop"></div>
+      </div>
+
+      <div class="actions">
+        <select id="market" title="Market">
+          <option value="us">🇺🇸 US</option>
+          <option value="in">🇮🇳 India</option>
+        </select>
+        <select id="theme" title="Segment">
+          <option value="">All segments</option>
+        </select>
+        <select id="days" title="Window">
+          <option value="1">Today</option>
+          <option value="7" selected>7 days</option>
+          <option value="30">30 days</option>
+        </select>
+        <button id="refresh" title="Fetch latest analyst data now"><span class="refresh-ic">↻</span> Refresh</button>
+        <button id="signIn" class="ghost-btn" hidden>Sign in</button>
+        <div class="user-menu" id="userMenu" hidden>
+          <span class="user-name" id="userName"></span>
+          <button id="logout" class="ghost-btn" title="Log out">Log out</button>
+        </div>
+      </div>
+    </header>
+
+    <section class="stats" id="stats"></section>
+    <section class="highlights" id="highlights"></section>
+
+    <main>
+      <div id="status" class="status"></div>
+      <div id="content"></div>
+    </main>
   </div>
+</div>
 
-  <section class="stats" id="stats"></section>
-  <section class="highlights" id="highlights"></section>
-  <div class="feed-meta"><span id="feedUpdated" class="muted"></span></div>
-
-  <main>
-    <div class="tabs">
-      <button class="tab active" data-view="feed">Feed</button>
-      <button class="tab" data-view="leaderboard">Leaderboard</button>
-      <button class="tab" data-view="watchlist">★ Watchlist</button>
-      <button class="tab" data-view="funds">📊 Funds</button>
-      <button class="tab" data-view="digest">📰 Market Digest</button>
-      <button class="tab" data-view="admin" id="adminTab" hidden>🛠 Admin</button>
+<!-- Auth overlay: dismissible — browsing is free, login only to save a watchlist -->
+<div class="auth-overlay" id="authOverlay">
+  <div class="auth-card">
+    <button class="auth-close" id="authClose" title="Close" aria-label="Close">✕</button>
+    <div class="auth-brand"><span class="logo">📈</span> AlphaFunds</div>
+    <p class="auth-tagline">Sign in to save stocks to your own watchlist. Browsing is free.</p>
+    <div class="auth-tabs">
+      <button class="auth-tab active" data-mode="login">Log in</button>
+      <button class="auth-tab" data-mode="signup">Sign up</button>
     </div>
-    <div id="status" class="status"></div>
-    <div id="content"></div>
-  </main>
-
-  <!-- Welcome popup — shown once per browser, dismissed to localStorage -->
-  <div id="welcomePopup" class="welcome-overlay" hidden>
-    <div class="welcome-card">
-      <button class="welcome-close" id="welcomeClose" aria-label="Close">✕</button>
-      <div class="welcome-title">👋 Welcome to AlphaFunds</div>
-      <ul class="welcome-features">
-        <li>📊 <strong>Live consensus</strong> — Buy / Hold / Sell ratings aggregated from 100s of analysts across US &amp; India stocks, updated daily.</li>
-        <li>🎯 <strong>Target hit tracking</strong> — See which analyst price targets were actually hit so you know who to trust.</li>
-        <li>💬 <strong>Ask AI</strong> — Chat with our AI assistant about any stock or the live feed using your real analyst data.</li>
-        <li>★ <strong>Personal watchlist</strong> — Pin stocks and track your entry price vs current value. <em>Free sign-up required.</em></li>
-      </ul>
-      <button class="welcome-got-it" id="welcomeGotIt">Got it — show me the data</button>
-    </div>
-  </div>
-
-  <!-- Ask-AI chat widget -->
-  <button id="chatFab" class="chat-fab" title="Ask AI about these stocks">💬 Ask AI</button>
-  <div id="chatPanel" class="chat-panel" hidden>
-    <div class="chat-head">
-      <span>💬 Ask AI <small id="chatScope"></small></span>
-      <button id="chatClose" class="chat-x" aria-label="Close">✕</button>
-    </div>
-    <div id="chatLog" class="chat-log">
-      <div class="chat-msg bot">Ask me about today's feed, the leaderboard, or a specific stock — e.g. <em>"which stocks have the strongest buy consensus?"</em> or <em>"why is NVDA rated buy?"</em></div>
-    </div>
-    <form id="chatForm" class="chat-input">
-      <input id="chatText" placeholder="Ask a question…" autocomplete="off" maxlength="500" />
-      <button type="submit" id="chatSend">Send</button>
+    <form id="authForm" autocomplete="on">
+      <label class="auth-field" id="nameField" hidden>
+        <span>Display name</span>
+        <input id="authName" type="text" maxlength="60" placeholder="Jane Investor" />
+      </label>
+      <label class="auth-field">
+        <span>Email</span>
+        <input id="authEmail" type="email" required placeholder="you@example.com" autocomplete="email" />
+      </label>
+      <label class="auth-field">
+        <span>Password</span>
+        <input id="authPassword" type="password" required minlength="8" placeholder="At least 8 characters" autocomplete="current-password" />
+      </label>
+      <div class="auth-error" id="authError"></div>
+      <button type="submit" class="auth-submit" id="authSubmit">Log in</button>
+      <button type="button" class="auth-forgot" id="authForgot">Forgot password?</button>
     </form>
   </div>
+</div>
 
-  <script src="/app.js?v=19"></script>
+<!-- Welcome popup — shown once per browser, dismissed to localStorage -->
+<div id="welcomePopup" class="welcome-overlay" hidden>
+  <div class="welcome-card">
+    <button class="welcome-close" id="welcomeClose" aria-label="Close">✕</button>
+    <div class="welcome-title">👋 Welcome to AlphaFunds</div>
+    <ul class="welcome-features">
+      <li>📊 <strong>Live consensus</strong> — Buy / Hold / Sell ratings aggregated from 100s of analysts across US &amp; India stocks, updated daily.</li>
+      <li>🎯 <strong>Target hit tracking</strong> — See which analyst price targets were actually hit so you know who to trust.</li>
+      <li>💬 <strong>Ask AI</strong> — Chat with our AI assistant about any stock or the live feed using your real analyst data.</li>
+      <li>★ <strong>Personal watchlist</strong> — Pin stocks and track your entry price vs current value. <em>Free sign-up required.</em></li>
+    </ul>
+    <button class="welcome-got-it" id="welcomeGotIt">Got it — show me the data</button>
+  </div>
+</div>
+
+<!-- Ask-AI floating assistant -->
+<button id="chatFab" class="chat-fab" title="Ask AI about these stocks"><span class="fab-ic">✦</span> Ask AI</button>
+<div id="chatPanel" class="chat-panel" hidden>
+  <div class="chat-head">
+    <span>✦ Ask AI <small id="chatScope"></small></span>
+    <button id="chatClose" class="chat-x" aria-label="Close">✕</button>
+  </div>
+  <div id="chatLog" class="chat-log">
+    <div class="chat-msg bot">Ask me about today's feed, the leaderboard, or a specific stock — e.g. <em>"which stocks have the strongest buy consensus?"</em> or <em>"why is NVDA rated buy?"</em></div>
+  </div>
+  <div class="chat-suggest" id="chatSuggest">
+    <button type="button" data-q="Which stocks have the strongest buy consensus?">Strongest buys</button>
+    <button type="button" data-q="What are the best target hit rates so far?">Best hit rates</button>
+    <button type="button" data-q="Which stocks have the most analyst coverage?">Most covered</button>
+  </div>
+  <form id="chatForm" class="chat-input">
+    <input id="chatText" placeholder="Ask a question…" autocomplete="off" maxlength="500" />
+    <button type="submit" id="chatSend">Send</button>
+  </form>
+</div>
+
+<script src="/app.js?v=20"></script>
 </body>
 </html>
