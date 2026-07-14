@@ -41,12 +41,12 @@ def test_grok_provider_reaches_llm(tmp_path):
     """With SUMMARY_PROVIDER=grok, an open-ended question must call the LLM."""
     store = _make_store(tmp_path, seed=True)
     settings = Settings(summary_provider="grok", grok_api_key="test-key")
-    # Open-ended phrasing that matches none of the rule-engine keyword branches.
     with patch("app.chat.generate_narrative", return_value="grok answer") as gen:
-        answer, error = answer_question(
+        answer, error, source = answer_question(
             store, settings, "summarize the overall picture of the data")
     assert gen.called
     assert answer == "grok answer"
+    assert source == "llm"
     assert error is None
 
 
@@ -54,11 +54,39 @@ def test_rule_provider_never_calls_llm(tmp_path):
     store = _make_store(tmp_path)
     settings = Settings(summary_provider="rule")
     with patch("app.chat.generate_narrative", return_value="should not happen") as gen:
-        answer, error = answer_question(
+        answer, error, source = answer_question(
             store, settings, "tell me something interesting about the data")
     assert not gen.called
-    assert answer  # graceful overview, never empty
+    assert answer  # graceful fallback, never empty
+    assert source in ("rule", "overview")   # some non-LLM layer answered
     assert error is None
+
+
+def test_llm_answers_even_rule_shaped_questions(tmp_path):
+    """LLM-FIRST regression: a question full of rule-engine keywords must
+    still be answered by the LLM when a provider is configured — the old
+    rules-first order made the bot parrot canned dashboard lists."""
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="gemini", gemini_api_key="test-key")
+    with patch("app.chat.generate_narrative", return_value="reasoned answer") as gen:
+        answer, error, source = answer_question(
+            store, settings, "which stocks have the strongest buy consensus and why?")
+    assert gen.called
+    assert answer == "reasoned answer"
+    assert source == "llm"
+
+
+def test_llm_failure_falls_back_to_rule_engine(tmp_path):
+    """LLM configured but unreachable → the rule engine answers, and the
+    source labels it as a fallback."""
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="gemini", gemini_api_key="test-key")
+    with patch("app.chat.generate_narrative", return_value=None) as gen:
+        answer, error, source = answer_question(
+            store, settings, "which stocks have the strongest buy consensus?")
+    assert gen.called
+    assert answer and "NVDA" in answer   # rule engine's strongest-buy list
+    assert source == "rule"
 
 
 # ── fund ticker detection ─────────────────────────────────────────────────────

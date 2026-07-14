@@ -908,6 +908,16 @@ $('#chatForm').addEventListener('submit', async (e) => {
     const res = await postJSON('/api/chat', body);
     thinking.classList.remove('pending');
     thinking.textContent = res.answer;
+    // Make fallback answers visibly fallbacks — if the AI didn't answer,
+    // the user should know they got a quick data lookup instead.
+    if (res.source && res.source !== 'llm') {
+      const tag = document.createElement('div');
+      tag.className = 'chat-src';
+      tag.textContent = res.source === 'rule' ? '⚡ quick data answer (AI unavailable)'
+        : res.source === 'fund-data' ? '⚡ fund data (AI unavailable)'
+        : 'ℹ data overview';
+      thinking.appendChild(tag);
+    }
   } catch (err) {
     thinking.classList.remove('pending');
     thinking.classList.add('err');

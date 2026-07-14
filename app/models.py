@@ -467,6 +467,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
+    source: str = "llm"   # llm | fund-data | rule | overview — which layer answered
 
 
 # ── Fund Tracker ──────────────────────────────────────────────────────────────

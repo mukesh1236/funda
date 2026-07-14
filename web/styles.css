@@ -548,6 +548,7 @@ td .caret { margin-right: 6px; }
 .chat-msg.bot  { align-self: flex-start; background: rgba(255, 255, 255, 0.07); border-bottom-left-radius: 4px; }
 .chat-msg.bot.pending { color: var(--muted); font-style: italic; }
 .chat-msg.bot.err { color: var(--bad-hi); }
+.chat-src { margin-top: 7px; font-size: 10.5px; color: var(--muted); font-style: italic; }
 .chat-suggest { display: flex; gap: 6px; padding: 0 14px 8px; flex-wrap: wrap; }
 .chat-suggest button {
   background: var(--bg-inset); border: 1px solid var(--border); color: var(--text-2);

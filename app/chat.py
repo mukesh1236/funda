@@ -233,21 +233,24 @@ def _prompt(question: str, market: str, feed: str, lb: str, sym_ctx: str) -> str
     region = "Indian (NSE)" if market == "in" else "US"
     focus = f"\n{sym_ctx}\n" if sym_ctx else ""
     return (
-        "You are AlphaFunds' data assistant. Your job is to summarise and interpret "
-        "the analyst dataset provided below — nothing else.\n\n"
-        "STRICT RULES:\n"
-        "- Use ONLY the numbers and stocks in the dataset below.\n"
-        "- Do NOT use your training knowledge about any company, stock, or market.\n"
-        "- Do NOT add company backgrounds, history, products, or general market commentary.\n"
-        "- If a company is not in the dataset, say: 'I don't have analyst data for that "
-        "stock in the current feed.'\n"
-        "- Be short: 2-5 sentences max. Cite tickers and numbers from the data.\n"
-        "- Do not give investment advice.\n\n"
+        "You are AlphaFunds' equity research assistant. Reason over the analyst "
+        "dataset below and answer the user's question directly.\n\n"
+        "GUIDELINES:\n"
+        "- First think about what the question is actually asking, then answer THAT "
+        "specifically — never reply with a generic list when a specific question was asked.\n"
+        "- Ground every claim in the dataset: cite tickers and the numbers behind your reasoning.\n"
+        "- You are encouraged to reason: compare stocks, compute upside vs. targets, weigh "
+        "conviction against coverage breadth, use hit rates to judge reliability, and explain "
+        "the WHY behind a consensus using the named firm actions and notes.\n"
+        "- If the dataset cannot answer the question, say so and name exactly what's missing — "
+        "do not invent facts about companies beyond this dataset.\n"
+        "- No investment advice; you analyse, the user decides.\n"
+        "- Answer in 3-8 sentences of clear prose.\n\n"
         f"MARKET: {region}\n\n"
         f"ANALYST FEED (last 30 days):\n{feed}\n\n"
         f"LEADERBOARD (by hit rate):\n{lb}\n"
         f"{focus}\n"
-        f"USER QUESTION: {question}\n\nANSWER (data only, 2-5 sentences):"
+        f"USER QUESTION: {question}\n\nANSWER:"
     )
 
 
@@ -338,15 +341,25 @@ def answer_question(
     question: str,
     market: str = "us",
     symbol: Optional[str] = None,
-) -> Tuple[Optional[str], Optional[str]]:
-    """Return (answer, error). Always tries to answer from data; the LLM is an
-    enhancement for open-ended questions, never a hard dependency."""
-    # 0) Fund-specific question — inject live fund data + RAG context first.
+) -> Tuple[Optional[str], Optional[str], str]:
+    """Return (answer, error, source).
+
+    LLM-FIRST: when an LLM provider is configured, every question goes to the
+    LLM with the full data context so answers are reasoned, not canned. The
+    deterministic rule engine and the overview are FALLBACKS for when the LLM
+    is off or unreachable — never the first choice. (It used to be the other
+    way around, which made the bot parrot dashboard lists.)
+
+    source ∈ {"llm", "fund-data", "rule", "overview"} — surfaced in the UI so
+    a fallback answer is visibly a fallback.
+    """
+    llm_on = settings.summary_provider in _LLM_PROVIDERS
+
+    # 0) Fund-specific question — inject live fund data + RAG context.
     fund_sym = _detect_fund_ticker(question)
-    fund_context = ""
     if fund_sym:
         fund_context = _build_fund_context(fund_sym)
-        if fund_context and settings.summary_provider in _LLM_PROVIDERS:
+        if fund_context and llm_on:
             # Pull extra context from the RAG index if available.
             try:
                 from app.fund_rag import query_fund_docs
@@ -357,43 +370,48 @@ def answer_question(
                 logger.debug("RAG query skipped: %s", e)
 
             fund_prompt = (
-                "You are a fund data assistant. Answer using ONLY the data below.\n"
-                "Be concise (2-4 sentences). Cite numbers from the data.\n"
-                "Do not give investment advice.\n\n"
+                "You are a fund research assistant. Reason over the data below to "
+                "answer the question directly — cite the numbers behind your answer, "
+                "and say what's missing if the data can't answer it.\n"
+                "Do not give investment advice. 3-6 sentences.\n\n"
                 f"{fund_context}\n\n"
                 f"QUESTION: {question}\n\nANSWER:"
             )
             answer = generate_narrative(fund_prompt, settings, timeout=30)
             if answer:
-                return answer, None
+                return answer, None, "llm"
 
-        # Return the fund context as a structured answer when LLM is off.
+        # LLM off/unreachable → structured fund data beats no answer.
         if fund_context:
-            return fund_context, None
+            return fund_context, None, "fund-data"
 
-    # Build the feed ONCE per question — it's the priciest input and was
-    # previously rebuilt by the rule engine, the LLM context, symbol detection,
-    # and the overview fallback (up to 4 times per chat request).
+    # Build the feed ONCE per question — priciest input, shared by every path.
     feed = build_feed(store, days=30, market=market)
 
-    # 1) Deterministic answer for common, structured questions (free, instant).
-    rule = _rule_answer(store, market, question, symbol, feed)
-    if rule:
-        return rule, None
-
-    # 2) Open-ended → LLM if configured and reachable.
-    if settings.summary_provider in _LLM_PROVIDERS:
+    # 1) LLM with full context — the primary answer path when configured.
+    if llm_on:
         feed_ctx = _fmt_feed(feed)
         lb = _fmt_leaderboard(store, market)
-        # include stock context even when symbol comes from question text
+        # include stock context even when the symbol comes from question text
         detected = symbol or _detect_symbol(question, feed.stocks)
         sym_ctx = _fmt_symbol(store, detected) if detected else ""
         prompt = _prompt(question, market, feed_ctx, lb, sym_ctx)
         answer = generate_narrative(prompt, settings, timeout=30)
         if answer:
-            return answer, None
+            return answer, None, "llm"
         from app import llm
-        logger.info("Chat LLM unavailable (%s) — using data overview.", llm.last_gemini_error)
+        logger.info("Chat LLM unavailable (%s) — falling back to rule engine.",
+                    llm.last_gemini_error)
 
-    # 3) LLM off or unavailable → graceful data overview (never a raw error).
-    return _overview(feed), None
+    # 2) Fallback: deterministic answer for common, structured questions.
+    rule = _rule_answer(store, market, question, symbol, feed)
+    if rule:
+        return rule, None, "rule"
+
+    # 3) Last resort: data overview (never a raw error).
+    overview = _overview(feed)
+    if not llm_on:
+        overview += ("\n\n💡 AI reasoning is off. Set SUMMARY_PROVIDER "
+                     "(gemini / grok / ollama) and the matching API key to get "
+                     "reasoned answers instead of quick data lookups.")
+    return overview, None, "overview"

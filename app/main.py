@@ -445,12 +445,12 @@ def chat(req: ChatRequest):
     Answers come from the configured LLM using only the current data."""
     from app.chat import answer_question
 
-    answer, error = answer_question(
+    answer, error, source = answer_question(
         store, settings, req.question, market=req.market, symbol=req.symbol
     )
     if error:
         raise HTTPException(503, detail=error)
-    return ChatResponse(answer=answer)
+    return ChatResponse(answer=answer, source=source)
 
 
 def _run_daily_and_invalidate():
