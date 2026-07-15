@@ -110,6 +110,16 @@ CREATE TABLE IF NOT EXISTS llm_calls (
 );
 CREATE INDEX IF NOT EXISTS idx_llm_calls_ts ON llm_calls(ts);
 
+-- One row per chat answer: which layer answered (llm | rule | overview |
+-- fund-data). Fallback RATE is the single best "is the AI feature healthy"
+-- signal — availability metrics alone miss silent degradation.
+CREATE TABLE IF NOT EXISTS chat_answers (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts     TEXT NOT NULL,
+    source TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_answers_ts ON chat_answers(ts);
+
 CREATE TABLE IF NOT EXISTS metrics_daily (
     day      TEXT PRIMARY KEY,   -- "YYYY-MM-DD"
     hits     INTEGER NOT NULL DEFAULT 0,   -- app page loads that day
@@ -580,6 +590,32 @@ class RecommendationStore:
                 (user_id,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── chat answer sources (fallback-rate tracking) ─────────────────────────
+    def add_chat_answer(self, source: str) -> None:
+        with _write_lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO chat_answers (ts, source) VALUES (?, ?)",
+                (datetime.now(timezone.utc).isoformat(timespec="seconds"), source),
+            )
+
+    def chat_source_stats(self, days: int = 7) -> dict:
+        """{total, by_source: {source: n}, fallback_rate} over the window.
+        fallback_rate = share of answers NOT produced by the LLM."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT source, COUNT(*) AS n FROM chat_answers WHERE ts >= ? "
+                "GROUP BY source", (cutoff,),
+            ).fetchall()
+        by_source = {r["source"]: r["n"] for r in rows}
+        total = sum(by_source.values())
+        non_llm = sum(n for s, n in by_source.items() if s != "llm")
+        return {
+            "total": total,
+            "by_source": by_source,
+            "fallback_rate": round(non_llm / total, 3) if total else None,
+        }
 
     # ── LLM call metrics (AI observability) ──────────────────────────────────
     def add_llm_call(self, provider: str, model: Optional[str], ok: bool,

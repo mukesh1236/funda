@@ -1316,18 +1316,7 @@ onLoggedIn = function(user) {
 // animation, and Ask-AI suggestion chips. Additive — nothing above changes.
 // ═════════════════════════════════════════════════════════════════════════════
 
-// ── SRE dashboard (demo data until a TeamOps deployment is reachable) ────────
-function _sreSeries(n, base, jitter, spike) {
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    let v = base + (Math.sin(i / 3.1) + Math.sin(i / 7.7)) * jitter * 0.4
-              + (Math.random() - 0.5) * jitter;
-    if (spike && i === spike.at) v = spike.v;
-    out.push(Math.max(0, v));
-  }
-  return out;
-}
-
+// ── SRE dashboard (REAL data from the app's own telemetry) ───────────────────
 function _sreLineChart(values, { fmt = (v) => v.toFixed(0), height = 74 } = {}) {
   const w = 300, h = height, pad = 4;
   const max = Math.max(...values) * 1.15 || 1, min = 0;
@@ -1352,6 +1341,13 @@ function _sreHeatCell(v, max) {
     title="${v.toFixed(2)}% errors"></span>`;
 }
 
+function _fmtUptime(seconds) {
+  if (seconds == null) return '—';
+  const d = Math.floor(seconds / 86400), h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
 async function loadSRE() {
   $('#highlights').innerHTML = '';
   // Defense in depth: the nav item is hidden for non-admins, but guard the
@@ -1362,79 +1358,120 @@ async function loadSRE() {
       '<div class="empty">🔒 The SRE dashboard is available to admins only.</div>';
     return;
   }
-  $('#status').textContent = 'Site reliability — uptime, latency, error rate, and incident flow.';
+  $('#status').textContent = 'Site reliability — live telemetry from this app’s own traffic and AI usage.';
+  $('#content').innerHTML = '<div class="loading">Loading live telemetry…</div>';
 
-  // Demo series (deterministic enough to look plausible)
-  const latency = _sreSeries(48, 640, 120, { at: 31, v: 1240 });
-  const errRate = _sreSeries(48, 0.4, 0.25, { at: 31, v: 1.9 });
-  const hourly  = _sreSeries(24, 0.35, 0.3, { at: 14, v: 1.6 });
-  const uptimePct = 99.72, uptimeSLO = 99.5;
-  const p95 = latency[latency.length - 1], p95SLO = 2000;
-  const errNow = errRate[errRate.length - 1];
+  let d;
+  try {
+    d = await getJSON('/api/admin/sre-metrics');
+  } catch (e) {
+    $('#content').innerHTML = `<div class="empty">Could not load SRE metrics: ${esc(e.message)}</div>`;
+    return;
+  }
+  const req = d.requests || {}, fresh = d.freshness || {}, budget = d.ai_budget || {};
+  const chat = d.chat_sources || {}, alerts = d.alerts || [];
 
   const slo = (label, actual, target, pct, cls) => `
     <div class="slo-row">
       <div class="slo-top"><span>${label}</span>
         <span><b>${actual}</b> <span class="muted">/ ${target}</span></span></div>
-      <div class="slo-bar"><div class="slo-fill ${cls}" style="width:${pct}%"></div></div>
+      <div class="slo-bar"><div class="slo-fill ${cls}" style="width:${Math.min(100, pct)}%"></div></div>
     </div>`;
 
-  const incidents = [
-    { id: 'INC-12', sev: 'sev2', title: 'funda: error rate spike', state: 'fixing',
-      owner: 'dev-2', opened: '08:14', sla: '14h left' },
-    { id: 'INC-11', sev: 'sev3', title: 'funda: latency over SLO', state: 'closed',
-      owner: 'sre-1', opened: 'yesterday', sla: 'met' },
-  ];
-  const active = incidents.filter((i) => i.state !== 'closed');
+  const err5 = req.error_rate_5xx != null ? (req.error_rate_5xx * 100) : null;
+  const maxHourly = Math.max(...(req.hourly_requests || [0]), 1);
+
+  // Budget gauge (calls; tokens too when a token budget is configured)
+  const burn = budget.call_burn_pct;
+  const burnCls = burn == null ? '' : burn >= 1 ? 'bad' : burn >= 0.8 ? 'warn' : '';
+  const budgetHtml = budget.call_budget ? slo(
+    'Daily AI call budget', `${budget.calls_today}`, `${budget.call_budget}`,
+    (burn || 0) * 100, burnCls) : '<p class="muted">No AI budget configured (AI_DAILY_CALL_BUDGET).</p>';
+  const tokenHtml = budget.token_budget ? slo(
+    'Daily token budget', (budget.tokens_today || 0).toLocaleString(),
+    budget.token_budget.toLocaleString(),
+    (budget.token_burn_pct || 0) * 100,
+    (budget.token_burn_pct || 0) >= 0.8 ? 'warn' : '') : '';
+
+  // Answer-source mix → fallback rate (the AI feature's real health metric)
+  const srcTotal = chat.total || 0;
+  const srcRow = (label, n, cls) => srcTotal ? `
+    <div class="slo-row"><div class="slo-top"><span>${label}</span><b>${n}</b></div>
+      <div class="slo-bar"><div class="slo-fill ${cls}" style="width:${(n / srcTotal * 100).toFixed(1)}%"></div></div>
+    </div>` : '';
+  const bySrc = chat.by_source || {};
+  const fbRate = chat.fallback_rate;
+
+  const alertRows = alerts.length ? alerts.map((a) => `
+    <div class="row"><span class="ts">${a.ts.slice(5, 16).replace('T', ' ')}</span>
+      <b>${esc(a.key)}</b> — ${esc(a.message)}</div>`).join('')
+    : '<p class="empty">No alerts fired. Thresholds: AI success <90%, budget ≥80%, daily job missed, 5xx >5%.</p>';
+
+  const slowRows = (req.slowest_endpoints || []).map((s) => `
+    <tr><td>${esc(s.endpoint)}</td><td>${s.count}</td><td>${Math.round(s.p95_ms)}ms</td></tr>`).join('')
+    || '<tr><td colspan="3" class="empty">Not enough traffic yet.</td></tr>';
 
   $('#content').innerHTML = `
-    <div class="sre-note">⚠ Demo data — connect a TeamOps deployment (see docs/TEAMOPS_DESIGN.md)
-      to stream live uptime, incidents, and SLOs for this app.</div>
-
     <div class="sre-grid">
       <div class="sre-card">
-        <h4>System uptime (30d)</h4>
-        <div class="sre-big">${uptimePct}%</div>
-        ${slo('Availability SLO', uptimePct + '%', uptimeSLO + '%',
-              Math.min(100, uptimePct / uptimeSLO * 100).toFixed(1),
-              uptimePct >= uptimeSLO ? '' : 'bad')}
+        <h4>Service (24h · live)</h4>
+        <div class="sre-big">${req.requests || 0}<span class="mini"> requests</span></div>
+        <div class="tile"><span>Process uptime</span><b>${_fmtUptime(req.process_uptime_seconds)}</b></div>
+        <div class="tile"><span>5xx error rate</span>
+          <b class="${err5 != null && err5 > 5 ? 'r-neg' : ''}">${err5 != null ? err5.toFixed(2) + '%' : '—'}</b></div>
+        <div class="tile"><span>4xx rate</span><b>${req.error_rate_4xx != null ? (req.error_rate_4xx * 100).toFixed(2) + '%' : '—'}</b></div>
       </div>
 
       <div class="sre-card">
-        <h4>p95 latency (48h) · ms</h4>
-        <div class="sre-big">${p95.toFixed(0)}<span class="mini"> ms</span></div>
-        ${_sreLineChart(latency)}
-        ${slo('Latency SLO', p95.toFixed(0) + 'ms', p95SLO + 'ms',
-              Math.min(100, (1 - p95 / p95SLO) * 100 + 50).toFixed(1),
-              p95 <= p95SLO ? '' : 'bad')}
+        <h4>API latency (24h · live)</h4>
+        <div class="sre-big">${req.p95_ms != null ? Math.round(req.p95_ms) + '<span class="mini"> ms p95</span>' : '—'}</div>
+        ${req.p95_series && req.p95_series.length > 1 ? _sreLineChart(req.p95_series) : ''}
+        <div class="tile"><span>p50 / p99</span>
+          <b>${req.p50_ms != null ? Math.round(req.p50_ms) + 'ms' : '—'} / ${req.p99_ms != null ? Math.round(req.p99_ms) + 'ms' : '—'}</b></div>
       </div>
 
       <div class="sre-card">
-        <h4>Error rate (48h) · %</h4>
-        <div class="sre-big">${errNow.toFixed(2)}<span class="mini"> %</span></div>
-        ${_sreLineChart(errRate, { fmt: (v) => v.toFixed(2) + '%' })}
+        <h4>Data freshness SLO</h4>
+        <div class="sre-big">${fresh.breach ? '<span class="r-neg">STALE</span>' : fresh.ran_today ? '<span class="r-pos">FRESH</span>' : 'PENDING'}</div>
+        <div class="tile"><span>Last collection run</span><b>${esc(fresh.last_run || 'never')}</b></div>
+        <div class="tile"><span>Scheduled</span><b>${esc(fresh.scheduled || '—')} +${fresh.grace_hours}h grace</b></div>
       </div>
 
       <div class="sre-card">
-        <h4>Errors by hour (today)</h4>
-        <div class="heat">${hourly.map((v) => _sreHeatCell(v, 1.6)).join('')}</div>
-        <div class="heat-legend">00h ${_sreHeatCell(0.1, 1.6)} low
-          ${_sreHeatCell(1.4, 1.6)} high · 23h</div>
+        <h4>AI budget burn (today)</h4>
+        ${budgetHtml}${tokenHtml}
+        <p class="muted" style="font-size:11px">At 100% the chat degrades to rule fallbacks — the 80% alert fires first.</p>
+      </div>
+    </div>
+
+    <div class="sre-grid" style="margin-top:12px">
+      <div class="sre-card">
+        <h4>Traffic by hour (24h, UTC · live)</h4>
+        <div class="heat">${(req.hourly_requests || []).map((v) => _sreHeatCell(v, maxHourly)).join('')}</div>
+        <div class="heat-legend">00h ${_sreHeatCell(0.05 * maxHourly, maxHourly)} low
+          ${_sreHeatCell(0.9 * maxHourly, maxHourly)} high · 23h</div>
+      </div>
+
+      <div class="sre-card">
+        <h4>Chat answer sources (7d) ${fbRate != null ? `· fallback rate <b class="${fbRate > 0.2 ? 'r-neg' : 'r-pos'}">${Math.round(fbRate * 100)}%</b>` : ''}</h4>
+        ${srcTotal ? `${srcRow('🤖 LLM (reasoned)', bySrc.llm || 0, '')}
+          ${srcRow('⚡ Rule fallback', bySrc.rule || 0, 'warn')}
+          ${srcRow('ℹ Overview fallback', bySrc.overview || 0, 'warn')}
+          ${srcRow('📊 Fund data', bySrc['fund-data'] || 0, '')}`
+          : '<p class="empty">No chat answers recorded yet — ask the AI something.</p>'}
+      </div>
+
+      <div class="sre-card">
+        <h4>Slowest endpoints (p95, 24h)</h4>
+        <table class="sre-inc-table"><thead><tr><th>Endpoint</th><th>Calls</th><th>p95</th></tr></thead>
+        <tbody>${slowRows}</tbody></table>
       </div>
     </div>
 
     <div class="sre-grid" style="margin-top:12px">
       <div class="sre-card" style="grid-column: 1 / -1">
-        <h4>Incidents · ${active.length} active</h4>
-        <table class="sre-inc-table"><thead>
-          <tr><th>ID</th><th>Sev</th><th>Title</th><th>State</th><th>Owner</th><th>Opened</th><th>SLA</th></tr>
-        </thead><tbody>
-          ${incidents.map((i) => `<tr>
-            <td>${i.id}</td>
-            <td><span class="sev ${i.sev}">${i.sev.toUpperCase()}</span></td>
-            <td>${i.title}</td><td>${i.state}</td><td>${i.owner}</td>
-            <td>${i.opened}</td><td>${i.sla}</td></tr>`).join('')}
-        </tbody></table>
+        <h4>Alerts (checked every 15 min)</h4>
+        <div class="mini-log">${alertRows}</div>
       </div>
     </div>
     <div id="aiUsage" style="margin-top:12px"><div class="loading">Loading AI usage…</div></div>`;

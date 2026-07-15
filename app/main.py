@@ -65,6 +65,7 @@ from app.auth import (
 from app.store import RecommendationStore
 from app.funds import router as funds_router
 from app import llm as llm_mod
+from app import reqmetrics
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -128,6 +129,13 @@ async def lifespan(app: FastAPI):
                 replace_existing=True,
                 next_run_time=datetime.now(),  # warm immediately on startup
             )
+            from app.alerts import check_alerts
+            _scheduler.add_job(
+                lambda: check_alerts(store, settings),
+                IntervalTrigger(minutes=15),
+                id="threshold_alerts",
+                replace_existing=True,
+            )
             _scheduler.start()
             logger.info(
                 "Scheduler started — daily run at %02d:%02d local time.",
@@ -153,15 +161,17 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 @app.middleware("http")
 async def timing(request: Request, call_next):
-    """Expose per-request latency (Server-Timing shows in browser dev tools)
-    and log anything slower than 1s so regressions are visible."""
+    """Expose per-request latency (Server-Timing shows in browser dev tools),
+    log anything slower than 1s, and feed the real SRE metrics buffer."""
     start = time.perf_counter()
     response = await call_next(request)
     dur_ms = (time.perf_counter() - start) * 1000
     response.headers["Server-Timing"] = f"app;dur={dur_ms:.0f}"
-    if dur_ms > 1000 and request.url.path.startswith("/api"):
-        logger.warning("slow request: %s %s → %.0f ms",
-                       request.method, request.url.path, dur_ms)
+    if request.url.path.startswith("/api"):
+        reqmetrics.record(request.url.path, response.status_code, dur_ms)
+        if dur_ms > 1000:
+            logger.warning("slow request: %s %s → %.0f ms",
+                           request.method, request.url.path, dur_ms)
     return response
 
 
@@ -321,6 +331,22 @@ def admin_ai_stats(days: int = Query(7, ge=1, le=90), _: dict = Depends(require_
     stats["provider_configured"] = settings.summary_provider
     stats["last_error"] = llm_mod.last_gemini_error
     return stats
+
+
+@app.get("/api/admin/sre-metrics")
+def admin_sre_metrics(_: dict = Depends(require_admin)):
+    """Real service reliability data for the SRE dashboard — request metrics
+    from live traffic, data-freshness SLO, AI budget burn, chat answer-source
+    mix, and the alert history. Admin only. Nothing here is synthetic."""
+    from app.alerts import ai_budget, data_freshness, recent_alerts
+
+    return {
+        "requests": reqmetrics.summary(),
+        "freshness": data_freshness(store, settings),
+        "ai_budget": ai_budget(store, settings),
+        "chat_sources": store.chat_source_stats(days=7),
+        "alerts": recent_alerts(20),
+    }
 
 
 @app.get("/api/themes", response_model=ThemesResult)
@@ -484,6 +510,10 @@ def chat(req: ChatRequest):
     )
     if error:
         raise HTTPException(503, detail=error)
+    try:
+        store.add_chat_answer(source)   # feeds the fallback-rate SLO
+    except Exception as e:
+        logger.debug("chat answer telemetry skipped: %s", e)
     return ChatResponse(answer=answer, source=source)
 
 

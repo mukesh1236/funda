@@ -100,6 +100,23 @@ class Settings(BaseSettings):
     # Admin bootstrap — this email is promoted to role="admin" on first startup.
     admin_email: str = ""
 
+    # ── SRE / AI observability ────────────────────────────────────────────────
+    # Daily AI budgets for the burn gauge + preemptive alerts. Defaults match
+    # OpenRouter's free tier without credits (~50 free-model requests/day).
+    # Set 0 to disable a budget.
+    ai_daily_call_budget: int = 50
+    ai_daily_token_budget: int = 0
+
+    # Where threshold alerts go: a Slack-compatible webhook URL receiving
+    # {"text": "..."}. Empty → alerts are logged at WARNING only.
+    alert_webhook_url: str = ""
+
+    # Hours before the same alert may fire again (spam guard).
+    alert_cooldown_hours: int = 6
+
+    # Grace period after the scheduled daily job before "job missed" alerts.
+    freshness_grace_hours: int = 2
+
     def universe(self, market: str = "us") -> list[str]:
         """Resolve the ticker watchlist for a market ("us" | "in"): env
         override, else the union of all thematic segments for that market
