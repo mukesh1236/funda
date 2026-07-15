@@ -467,6 +467,35 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
+    source: str = "llm"   # llm | fund-data | rule | overview — which layer answered
+
+
+# ── Fund return drivers (Pareto attribution) ─────────────────────────────────
+
+class FundDriverItem(BaseModel):
+    ticker: str
+    name: str
+    weight: float               # % of fund net assets
+    ret_pct: float              # holding's period price return
+    contribution: float         # weight x return, in pp of fund return
+    cum_pct: Optional[float] = None   # cumulative % of total positive contribution
+    pareto: bool = False        # part of the set driving 80% of the gain
+
+
+class FundDriversResult(BaseModel):
+    symbol: str
+    period: str
+    status: str = "ready"                 # ready | computing | unavailable
+    headline: Optional[str] = None
+    holdings_count: int = 0               # holdings included in the analysis
+    coverage_pct: Optional[float] = None  # sum of included weights (≈100 for N-PORT)
+    total_contribution_pct: Optional[float] = None
+    pareto_count: int = 0
+    pareto_weight_pct: Optional[float] = None
+    source: Optional[str] = None          # nport | yfinance_top10
+    as_of: Optional[str] = None
+    items: List[FundDriverItem] = []
+    notes: List[str] = []
 
 
 # ── Fund Tracker ──────────────────────────────────────────────────────────────

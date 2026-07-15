@@ -378,6 +378,29 @@ td .caret { margin-right: 6px; }
 .fund-card-actions { display: flex; gap: 8px; margin-top: 10px; }
 .fund-detail-panel { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
 .fund-detail-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+/* return drivers (Pareto) */
+.drv-section { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+.drv-head { display: flex; justify-content: space-between; align-items: center; }
+.drv-periods button {
+  background: var(--bg-inset); border: 1px solid var(--border); color: var(--muted);
+  font-size: 11px; padding: 3px 9px; border-radius: 7px; margin-left: 4px;
+}
+.drv-periods button.active { background: var(--accent-soft); border-color: var(--accent); color: #cfe3fb; }
+.drv-headline { font-size: 12.5px; color: var(--text-2); margin: 8px 0 10px; }
+.drv-cols, .drv-row {
+  display: grid; grid-template-columns: 58px 1fr 68px 42px;
+  gap: 8px; align-items: center; font-size: 12px; padding: 3px 0;
+}
+.drv-cols { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+.drv-row.pareto .drv-tick { color: var(--accent); font-weight: 800; }
+.drv-tick { font-weight: 700; font-variant-numeric: tabular-nums; }
+.drv-bar-wrap { height: 8px; background: rgba(255, 255, 255, 0.07); border-radius: 4px; overflow: hidden; }
+.drv-bar { display: block; height: 100%; border-radius: 4px 4px 4px 4px; }
+.drv-bar.pos { background: var(--good-hi); }
+.drv-bar.neg { background: var(--bad-hi); }
+.drv-val { text-align: right; font-variant-numeric: tabular-nums; }
+.drv-cum { text-align: right; font-variant-numeric: tabular-nums; font-size: 11px; }
+
 .cmp-section { margin-top: 18px; padding: 16px; }
 .cmp-inputs { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
 .cmp-result { margin-top: 10px; }
@@ -548,6 +571,7 @@ td .caret { margin-right: 6px; }
 .chat-msg.bot  { align-self: flex-start; background: rgba(255, 255, 255, 0.07); border-bottom-left-radius: 4px; }
 .chat-msg.bot.pending { color: var(--muted); font-style: italic; }
 .chat-msg.bot.err { color: var(--bad-hi); }
+.chat-src { margin-top: 7px; font-size: 10.5px; color: var(--muted); font-style: italic; }
 .chat-suggest { display: flex; gap: 6px; padding: 0 14px 8px; flex-wrap: wrap; }
 .chat-suggest button {
   background: var(--bg-inset); border: 1px solid var(--border); color: var(--text-2);

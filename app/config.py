@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     grok_api_key: str = ""
     grok_model: str = "grok-3-mini"
 
+    # OpenRouter — one key, many models, including free open-source ones.
+    # Get a key at https://openrouter.ai/keys ; models ending in ":free" cost
+    # nothing. Default is DeepSeek V3.1 free — the strongest free open-source
+    # model for grounded reasoning at the time of writing.
+    openrouter_api_key: str = ""
+    openrouter_model: str = "deepseek/deepseek-chat-v3.1:free"
+
     # Notifications: "console" | "whatsapp"
     notifier: str = "console"
     whatsapp_to: str = ""  # destination number when whatsapp is wired up

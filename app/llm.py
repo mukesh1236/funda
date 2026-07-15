@@ -29,9 +29,16 @@ def generate_narrative(prompt: str, settings: Settings, timeout: float = 20) -> 
         return gemini_generate(prompt, settings, timeout)
     if provider == "grok":
         return grok_generate(prompt, settings, timeout)
+    if provider == "openrouter":
+        return openrouter_generate(prompt, settings, timeout)
     if provider == "ollama":
         return ollama_generate(prompt, settings, timeout)
     if provider == "auto":
+        # Cheapest-first: OpenRouter free open-source models cost nothing.
+        if settings.openrouter_api_key:
+            answer = openrouter_generate(prompt, settings, timeout)
+            if answer:
+                return answer
         if settings.grok_api_key:
             return grok_generate(prompt, settings, timeout)
         if settings.gemini_api_key:
@@ -117,6 +124,52 @@ def grok_generate(prompt: str, settings: Settings, timeout: float = 20) -> Optio
     except Exception as e:
         last_gemini_error = f"Grok {type(e).__name__}: {e}"
         logger.warning("Grok call failed: %s", e)
+        return None
+
+
+def openrouter_generate(prompt: str, settings: Settings, timeout: float = 30) -> Optional[str]:
+    """Prose from OpenRouter (OpenAI-compatible). Models ending in ':free'
+    (e.g. deepseek/deepseek-chat-v3.1:free) cost nothing — the affordable
+    default for this app. None on any failure."""
+    global last_gemini_error
+    if not settings.openrouter_api_key:
+        last_gemini_error = "OPENROUTER_API_KEY not set"
+        logger.info("OpenRouter selected but OPENROUTER_API_KEY is not set.")
+        return None
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.openrouter_api_key}",
+                    # Optional attribution headers OpenRouter recommends:
+                    "HTTP-Referer": settings.app_base_url,
+                    "X-Title": "AlphaFunds Analyst Tracker",
+                },
+                json={
+                    "model": settings.openrouter_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 700,
+                },
+            )
+            if resp.status_code != 200:
+                last_gemini_error = f"OpenRouter HTTP {resp.status_code}: {resp.text[:200]}"
+                logger.warning("OpenRouter HTTP %s for model %s: %s",
+                               resp.status_code, settings.openrouter_model, resp.text[:300])
+                return None
+            text = (
+                resp.json()
+                .get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                or ""
+            ).strip()
+            if not text:
+                last_gemini_error = f"OpenRouter empty response: {resp.text[:200]}"
+            return text or None
+    except Exception as e:
+        last_gemini_error = f"OpenRouter {type(e).__name__}: {e}"
+        logger.warning("OpenRouter call failed: %s", e)
         return None
 
 

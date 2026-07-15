@@ -908,6 +908,16 @@ $('#chatForm').addEventListener('submit', async (e) => {
     const res = await postJSON('/api/chat', body);
     thinking.classList.remove('pending');
     thinking.textContent = res.answer;
+    // Make fallback answers visibly fallbacks — if the AI didn't answer,
+    // the user should know they got a quick data lookup instead.
+    if (res.source && res.source !== 'llm') {
+      const tag = document.createElement('div');
+      tag.className = 'chat-src';
+      tag.textContent = res.source === 'rule' ? '⚡ quick data answer (AI unavailable)'
+        : res.source === 'fund-data' ? '⚡ fund data (AI unavailable)'
+        : 'ℹ data overview';
+      thinking.appendChild(tag);
+    }
   } catch (err) {
     thinking.classList.remove('pending');
     thinking.classList.add('err');
@@ -990,6 +1000,48 @@ function _fundCard(f) {
     </div>`;
 }
 
+async function _loadDrivers(sym, period, isRetry) {
+  const body = document.querySelector(`#drv-${CSS.escape(sym)} .drv-body`);
+  if (!body) return;
+  if (!isRetry) body.innerHTML = '<div class="loading">Analyzing holdings…</div>';
+  try {
+    const d = await getJSON(`/api/funds/${encodeURIComponent(sym)}/drivers?period=${period}`);
+    if (d.status === 'computing') {
+      body.innerHTML = `<div class="loading">Fetching the fund's complete SEC portfolio
+        and pricing every holding — this first run takes ~30s…</div>`;
+      setTimeout(() => _loadDrivers(sym, period, true), 12000);
+      return;
+    }
+    if (d.status !== 'ready' || !d.items.length) {
+      body.innerHTML = `<div class="empty">${esc((d.notes || []).join(' ') || 'No driver data available.')}</div>`;
+      return;
+    }
+    const maxAbs = Math.max(...d.items.map(i => Math.abs(i.contribution)), 0.001);
+    const shown = d.items.slice(0, 25);
+    const rows = shown.map(i => `
+      <div class="drv-row ${i.pareto ? 'pareto' : ''}"
+           title="${i.weight}% weight × ${i.ret_pct}% return = ${i.contribution}pp of fund return">
+        <span class="drv-tick">${esc(i.ticker)}</span>
+        <span class="drv-bar-wrap">
+          <span class="drv-bar ${i.contribution >= 0 ? 'pos' : 'neg'}"
+                style="width:${(Math.abs(i.contribution) / maxAbs * 100).toFixed(1)}%"></span>
+        </span>
+        <span class="drv-val ${i.contribution >= 0 ? 'r-pos' : 'r-neg'}">${i.contribution >= 0 ? '+' : ''}${i.contribution.toFixed(2)}pp</span>
+        <span class="drv-cum muted">${i.cum_pct != null ? i.cum_pct.toFixed(0) + '%' : '—'}</span>
+      </div>`).join('');
+    const more = d.items.length > 25
+      ? `<div class="muted" style="font-size:11px;padding:4px 0">…and ${d.items.length - 25} more holdings</div>` : '';
+    body.innerHTML = `
+      <p class="drv-headline">${esc(d.headline || '')}</p>
+      <div class="drv-cols muted"><span>Ticker</span><span>Contribution to fund return</span><span></span><span>cum.</span></div>
+      ${rows}${more}
+      ${(d.notes || []).length ? `<p class="muted" style="font-size:11px">${esc(d.notes.join(' · '))}</p>` : ''}
+      <p class="muted" style="font-size:11px">Source: ${d.source === 'nport' ? `SEC N-PORT complete portfolio (as of ${esc(d.as_of || '?')})` : 'top disclosed holdings only'}</p>`;
+  } catch (e) {
+    body.innerHTML = `<div class="empty">Could not analyze: ${esc(e.message)}</div>`;
+  }
+}
+
 async function _toggleFundDetail(sym) {
   const panel = document.getElementById('fdp-' + sym);
   if (!panel) return;
@@ -1016,8 +1068,25 @@ async function _toggleFundDetail(sym) {
           ${sectors ? `<div><h5>Sector weights</h5>${sectors}</div>` : ''}
         </div>
         ${d.data_notes.length ? `<p class="muted" style="font-size:12px">${esc(d.data_notes.join(' · '))}</p>` : ''}
+        <div class="drv-section" id="drv-${esc(sym)}">
+          <div class="drv-head">
+            <h5>Return drivers <span class="muted">(Pareto 80/20)</span></h5>
+            <span class="drv-periods">
+              <button data-p="3mo">3M</button><button data-p="6mo">6M</button>
+              <button data-p="1y" class="active">1Y</button>
+            </span>
+          </div>
+          <div class="drv-body"><div class="loading">Analyzing holdings…</div></div>
+        </div>
       </div>`;
     panel.dataset.loaded = '1';
+    const drv = document.getElementById('drv-' + sym);
+    drv.querySelectorAll('.drv-periods button').forEach(b =>
+      b.addEventListener('click', () => {
+        drv.querySelectorAll('.drv-periods button').forEach(x => x.classList.toggle('active', x === b));
+        _loadDrivers(sym, b.dataset.p);
+      }));
+    _loadDrivers(sym, '1y');
   } catch (e) {
     panel.innerHTML = `<div class="loading">Could not load: ${esc(e.message)}</div>`;
   }
