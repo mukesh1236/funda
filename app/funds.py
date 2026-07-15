@@ -151,8 +151,11 @@ def _load_all_holdings(sym: str) -> tuple:
 
     holdings = get_fund_holdings(sym)
     if holdings:
-        notes.append("Complete SEC N-PORT holdings unavailable for this fund — "
-                      "analysis covers only the top disclosed holdings.")
+        from app.sources import nport as nport_mod
+        reason = getattr(nport_mod, "last_error", None)
+        notes.append("Complete SEC N-PORT holdings unavailable for this fund"
+                      + (f" ({reason})" if reason else "")
+                      + " — analysis covers only the top disclosed holdings.")
         return holdings, None, "yfinance_top10", notes
     return [], None, None, notes
 

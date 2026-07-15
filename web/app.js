@@ -791,7 +791,13 @@ function hideAuth() {
 // Reflect login state in the header: "Sign in" button vs. the user menu.
 function updateAuthUI() {
   const isAdmin = _currentUser && _currentUser.role === 'admin';
+  // Operations (SRE dashboard + Admin) is admin-only, not for every visitor.
+  const opsNav = document.getElementById('opsNav');
+  if (opsNav) opsNav.hidden = !isAdmin;
   $('#adminTab').hidden = !isAdmin;
+  const sreTab = document.getElementById('sreTab');
+  if (sreTab) sreTab.hidden = !isAdmin;
+  if (!isAdmin && (view === 'admin' || view === 'sre')) { view = 'feed'; render(); }
   if (_currentUser) {
     $('#userName').textContent = _currentUser.display_name || _currentUser.email;
     $('#userMenu').hidden = false;
@@ -799,7 +805,6 @@ function updateAuthUI() {
   } else {
     $('#userMenu').hidden = true;
     $('#signIn').hidden = false;
-    if (view === 'admin') { view = 'feed'; render(); }   // drop admin view on logout
   }
 }
 
@@ -905,7 +910,23 @@ $('#chatForm').addEventListener('submit', async (e) => {
   try {
     const body = { question: q, market: currentMarket() };
     if (_chatSymbol) body.symbol = _chatSymbol;
-    const res = await postJSON('/api/chat', body);
+    // Hard client-side timeout: a hung request must never leave the chat
+    // stuck on "Thinking…" forever.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 90000);
+    let res;
+    try {
+      const raw = await fetch(API + '/api/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body), signal: ctrl.signal,
+      });
+      if (!raw.ok) {
+        let detail = `chat → ${raw.status}`;
+        try { const j = await raw.json(); if (j.detail) detail = j.detail; } catch (e2) {}
+        throw new Error(detail);
+      }
+      res = await raw.json();
+    } finally { clearTimeout(timer); }
     thinking.classList.remove('pending');
     thinking.textContent = res.answer;
     // Make fallback answers visibly fallbacks — if the AI didn't answer,
@@ -921,7 +942,9 @@ $('#chatForm').addEventListener('submit', async (e) => {
   } catch (err) {
     thinking.classList.remove('pending');
     thinking.classList.add('err');
-    thinking.textContent = err.message || 'Could not reach the AI.';
+    thinking.textContent = err.name === 'AbortError'
+      ? 'The AI took too long to answer. Please try again — if this keeps happening, check /api/health → llm.last_error.'
+      : (err.message || 'Could not reach the AI.');
   } finally {
     $('#chatSend').disabled = false;
     $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
@@ -1278,6 +1301,14 @@ function _sreHeatCell(v, max) {
 
 async function loadSRE() {
   $('#highlights').innerHTML = '';
+  // Defense in depth: the nav item is hidden for non-admins, but guard the
+  // renderer too in case the view is reached some other way.
+  if (!_currentUser || _currentUser.role !== 'admin') {
+    $('#status').textContent = '';
+    $('#content').innerHTML =
+      '<div class="empty">🔒 The SRE dashboard is available to admins only.</div>';
+    return;
+  }
   $('#status').textContent = 'Site reliability — uptime, latency, error rate, and incident flow.';
 
   // Demo series (deterministic enough to look plausible)

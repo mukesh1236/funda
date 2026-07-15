@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=21" />
+  <link rel="stylesheet" href="/styles.css?v=22" />
 </head>
 <body>
 <div class="app-shell">
@@ -41,12 +41,13 @@
       </button>
     </nav>
 
-    <nav class="nav-group">
+    <!-- Operations: admin-only — revealed by updateAuthUI() for role=admin -->
+    <nav class="nav-group" id="opsNav" hidden>
       <div class="nav-label">Operations</div>
-      <button class="tab nav-item" data-view="sre">
+      <button class="tab nav-item" data-view="sre" id="sreTab">
         <span class="nav-ic">◈</span> SRE Dashboard
       </button>
-      <button class="tab nav-item nav-admin" data-view="admin" id="adminTab" hidden>
+      <button class="tab nav-item nav-admin" data-view="admin" id="adminTab">
         <span class="nav-ic">🔒</span> Admin
       </button>
     </nav>
@@ -164,6 +165,6 @@
   </form>
 </div>
 
-<script src="/app.js?v=21"></script>
+<script src="/app.js?v=22"></script>
 </body>
 </html>

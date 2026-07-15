@@ -64,6 +64,7 @@ from app.auth import (
 )
 from app.store import RecommendationStore
 from app.funds import router as funds_router
+from app import llm as llm_mod
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -214,6 +215,9 @@ def health():
             "gemini_model": settings.gemini_model,
             "openrouter_key_set": bool(settings.openrouter_api_key),
             "openrouter_model": settings.openrouter_model,
+            # Why the most recent LLM call failed (None = last call succeeded).
+            # First place to look when chat shows fallback answers.
+            "last_error": llm_mod.last_gemini_error,
         },
     }
 

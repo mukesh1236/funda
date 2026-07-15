@@ -27,45 +27,79 @@ logger = logging.getLogger(__name__)
 _UA = os.environ.get("EDGAR_USER_AGENT", "AlphaFunds/1.0 (research; contact via repo)")
 _HEADERS = {"User-Agent": _UA, "Accept-Encoding": "gzip"}
 
-_MF_MAP_CACHE: TTLCache = TTLCache(maxsize=1, ttl=24 * 3600)
+_MF_MAP_CACHE: TTLCache = TTLCache(maxsize=2, ttl=24 * 3600)
 _HOLDINGS_CACHE: TTLCache = TTLCache(maxsize=64, ttl=24 * 3600)
 
 _MAX_NPORT_DOCS_TO_TRY = 8      # a CIK files one NPORT-P per series per month
 
+# Why the last fetch failed — surfaced in the API's notes so the operator can
+# tell "set EDGAR_USER_AGENT" apart from "this fund isn't SEC-registered".
+last_error: Optional[str] = None
+
 
 def _get(url: str, timeout: float = 30) -> Optional[httpx.Response]:
+    global last_error
     try:
         resp = httpx.get(url, headers=_HEADERS, timeout=timeout, follow_redirects=True)
         if resp.status_code == 200:
             return resp
         logger.info("EDGAR %s -> HTTP %s", url, resp.status_code)
+        last_error = (f"SEC EDGAR returned HTTP {resp.status_code}"
+                      + (" — set EDGAR_USER_AGENT to an identifying string with "
+                         "contact info" if resp.status_code == 403 else ""))
     except Exception as e:
         logger.info("EDGAR fetch failed %s: %s", url, e)
+        last_error = f"SEC EDGAR unreachable ({type(e).__name__})"
     return None
 
 
-def fund_identity(ticker: str) -> Optional[Tuple[int, str]]:
-    """(cik, seriesId) for a fund ticker from SEC's mutual-fund ticker map.
-    Covers mutual funds AND ETFs registered as investment companies."""
+def fund_identity(ticker: str) -> Optional[Tuple[int, Optional[str]]]:
+    """(cik, seriesId|None) for a fund ticker.
+
+    Primary: SEC's mutual-fund ticker map (share-class tickers → CIK+series).
+    Secondary: SEC's company ticker map — big ETFs (QQQ, SPY, IWM…) are
+    registered trusts whose EXCHANGE ticker appears there, not in the MF map;
+    for those we parse the newest NPORT-P without a series filter (single-fund
+    trusts have one)."""
+    global last_error
     sym = ticker.upper().strip()
-    mapping = _MF_MAP_CACHE.get("map")
-    if mapping is None:
+
+    mf_map = _MF_MAP_CACHE.get("mf")
+    if mf_map is None:
         resp = _get("https://www.sec.gov/files/company_tickers_mf.json")
-        if resp is None:
-            return None
-        try:
-            doc = resp.json()
-            fields = doc["fields"]                     # [cik, seriesId, classId, symbol]
-            i_cik, i_series = fields.index("cik"), fields.index("seriesId")
-            i_sym = fields.index("symbol")
-            mapping = {}
-            for row in doc["data"]:
-                mapping[str(row[i_sym]).upper()] = (int(row[i_cik]), str(row[i_series]))
-        except Exception as e:
-            logger.warning("company_tickers_mf parse failed: %s", e)
-            return None
-        _MF_MAP_CACHE["map"] = mapping
-    return mapping.get(sym)
+        if resp is not None:
+            try:
+                doc = resp.json()
+                fields = doc["fields"]                 # [cik, seriesId, classId, symbol]
+                i_cik, i_series = fields.index("cik"), fields.index("seriesId")
+                i_sym = fields.index("symbol")
+                mf_map = {str(r[i_sym]).upper(): (int(r[i_cik]), str(r[i_series]))
+                          for r in doc["data"]}
+                _MF_MAP_CACHE["mf"] = mf_map
+            except Exception as e:
+                logger.warning("company_tickers_mf parse failed: %s", e)
+                mf_map = None
+    if mf_map and sym in mf_map:
+        return mf_map[sym]
+
+    co_map = _MF_MAP_CACHE.get("co")
+    if co_map is None:
+        resp = _get("https://www.sec.gov/files/company_tickers.json")
+        if resp is not None:
+            try:
+                co_map = {str(v["ticker"]).upper(): int(v["cik_str"])
+                          for v in resp.json().values()}
+                _MF_MAP_CACHE["co"] = co_map
+            except Exception as e:
+                logger.warning("company_tickers parse failed: %s", e)
+                co_map = None
+    if co_map and sym in co_map:
+        return (co_map[sym], None)
+
+    if mf_map is not None or co_map is not None:
+        last_error = (f"{sym} not found in SEC's fund or company ticker "
+                      "registries (non-US funds aren't covered)")
+    return None
 
 
 def _iter_local(root, tag: str):
@@ -134,14 +168,16 @@ def _parse_nport_xml(xml_bytes: bytes, want_series: Optional[str]) -> Optional[d
 def fetch_nport_holdings(ticker: str) -> Optional[dict]:
     """Latest complete portfolio for `ticker` from its newest NPORT-P filing.
     {"as_of", "holdings": [{name, cusip, ticker, weight}]} or None."""
+    global last_error
     sym = ticker.upper().strip()
     cached = _HOLDINGS_CACHE.get(sym)
     if cached is not None:
         return cached
+    last_error = None
 
     ident = fund_identity(sym)
     if ident is None:
-        logger.info("N-PORT: %s not in SEC fund ticker map", sym)
+        logger.info("N-PORT: no SEC identity for %s (%s)", sym, last_error)
         return None
     cik, series_id = ident
 
@@ -176,6 +212,9 @@ def fetch_nport_holdings(ticker: str) -> Optional[dict]:
                         sym, len(result["holdings"]), result["as_of"])
             return result
     logger.info("N-PORT: no matching filing found for %s (tried %d docs)", sym, tried)
+    if last_error is None:
+        last_error = (f"no NPORT-P filing found for {sym}"
+                       if tried else f"the SEC registrant for {sym} has no NPORT-P filings")
     return None
 
 
