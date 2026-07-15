@@ -10,18 +10,23 @@ Routes (all under /api/funds):
 """
 import logging
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
+from cachetools import TTLCache
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from app.auth import get_current_user
 from app.config import get_settings
+from app.fund_analytics import batch_period_returns, build_headline, pareto_drivers, PERIOD_DAYS
 from app.fund_data import get_fund_info, get_fund_holdings, get_fund_performance
 from app.models import (
     FundAddRequest,
     FundCompareResult,
     FundDetail,
+    FundDriverItem,
+    FundDriversResult,
     FundHolding,
     FundMetrics,
     FundPortfolioItem,
@@ -112,6 +117,92 @@ def _compare_holdings(h1: List[dict], h2: List[dict]) -> dict:
     }
 
 
+# ── return drivers (Pareto attribution over ALL holdings) ────────────────────
+
+_DRIVERS_CACHE: TTLCache = TTLCache(maxsize=64, ttl=24 * 3600)   # (SYM, period) → result
+_DRIVERS_PENDING: set = set()
+_DRIVERS_LOCK = threading.Lock()
+
+
+def _load_all_holdings(sym: str) -> tuple:
+    """Full portfolio for a fund: stored copy → fresh N-PORT → yfinance top-10.
+    Returns (holdings, as_of, source, notes)."""
+    notes: List[str] = []
+    stored = _store.get_fund_holdings_stored(sym)
+    if stored:
+        return stored, stored[0].get("as_of"), stored[0].get("source", "nport"), notes
+
+    from app.sources.nport import fetch_nport_holdings, resolve_cusips
+    nport = fetch_nport_holdings(sym)
+    if nport and nport.get("holdings"):
+        holdings = nport["holdings"]
+        # Resolve missing tickers: permanent store first, then OpenFIGI.
+        unresolved = [h["cusip"] for h in holdings if not h.get("ticker") and h.get("cusip")]
+        known = _store.get_security_ids(unresolved)
+        fresh = resolve_cusips([c for c in unresolved if c not in known])
+        if fresh:
+            _store.upsert_security_ids(fresh)
+        id_map = {**known, **fresh}
+        for h in holdings:
+            if not h.get("ticker") and h.get("cusip"):
+                h["ticker"] = id_map.get(h["cusip"])
+        _store.replace_fund_holdings(sym, holdings, nport.get("as_of"), "nport")
+        return holdings, nport.get("as_of"), "nport", notes
+
+    holdings = get_fund_holdings(sym)
+    if holdings:
+        notes.append("Complete SEC N-PORT holdings unavailable for this fund — "
+                      "analysis covers only the top disclosed holdings.")
+        return holdings, None, "yfinance_top10", notes
+    return [], None, None, notes
+
+
+def _compute_drivers(sym: str, period: str) -> FundDriversResult:
+    holdings, as_of, source, notes = _load_all_holdings(sym)
+    if not holdings:
+        return FundDriversResult(symbol=sym, period=period, status="unavailable",
+                                  notes=["No holdings data found for this fund."])
+
+    tickers = [h["ticker"] for h in holdings if h.get("ticker")]
+    returns = batch_period_returns(tickers, period=period)
+    result = pareto_drivers(holdings, returns)
+    unpriced = len(tickers) - len([t for t in tickers if t.upper() in returns])
+    if result["skipped"]:
+        notes.append(f"{result['skipped']} position(s) skipped "
+                      f"(no ticker or no price data — e.g. cash, bonds, swaps).")
+
+    out = FundDriversResult(
+        symbol=sym, period=period, status="ready",
+        headline=build_headline(sym, period, result, holdings_count=len(result["items"])),
+        holdings_count=len(result["items"]),
+        coverage_pct=result["coverage_pct"],
+        total_contribution_pct=result["total_contribution_pct"],
+        pareto_count=result["pareto_count"],
+        pareto_weight_pct=result["pareto_weight_pct"],
+        source=source, as_of=as_of,
+        items=[FundDriverItem(**i) for i in result["items"]],
+        notes=notes,
+    )
+    _DRIVERS_CACHE[(sym, period)] = out
+    return out
+
+
+def _compute_drivers_bg(sym: str, period: str) -> None:
+    try:
+        _compute_drivers(sym, period)
+    except Exception as e:
+        logger.warning("drivers background compute failed for %s: %s", sym, e)
+    finally:
+        with _DRIVERS_LOCK:
+            _DRIVERS_PENDING.discard((sym, period))
+
+
+def drivers_headline_cached(sym: str, period: str = "1y") -> Optional[str]:
+    """Cached headline for chat context — never computes, never blocks."""
+    cached = _DRIVERS_CACHE.get((sym.upper().strip(), period))
+    return cached.headline if cached and cached.status == "ready" else None
+
+
 # ── routes ────────────────────────────────────────────────────────────────────
 
 # NOTE: /compare must be registered BEFORE /{symbol} to avoid FastAPI routing it
@@ -156,6 +247,39 @@ def compare_funds(
         only_a=[FundHolding(**h) for h in ov["only_a"]],
         only_b=[FundHolding(**h) for h in ov["only_b"]],
     )
+
+
+@router.get("/{symbol}/drivers", response_model=FundDriversResult)
+def fund_drivers(
+    symbol: str,
+    background_tasks: BackgroundTasks,
+    period: str = Query("1y", pattern="^(3mo|6mo|1y)$"),
+):
+    """Pareto return attribution: which holdings drive this fund's return.
+    Contribution = weight x period return per holding, over the COMPLETE
+    SEC N-PORT portfolio when available (yfinance top-10 fallback)."""
+    try:
+        sym = normalize_symbol(symbol)
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e))
+
+    cached = _DRIVERS_CACHE.get((sym, period))
+    if cached is not None:
+        return cached
+
+    # Cold fund: N-PORT fetch + a batched multi-hundred-ticker download can
+    # take ~30s — run in the background and let the UI poll.
+    if not _store.get_fund_holdings_stored(sym):
+        with _DRIVERS_LOCK:
+            if (sym, period) not in _DRIVERS_PENDING:
+                _DRIVERS_PENDING.add((sym, period))
+                background_tasks.add_task(_compute_drivers_bg, sym, period)
+        return FundDriversResult(
+            symbol=sym, period=period, status="computing",
+            notes=["Fetching the fund's complete SEC portfolio and pricing its "
+                   "holdings — try again in ~30 seconds."])
+
+    return _compute_drivers(sym, period)
 
 
 @router.get("", response_model=List[FundPortfolioItem])

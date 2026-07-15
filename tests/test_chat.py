@@ -32,9 +32,20 @@ def _make_store(tmp_path, seed: bool = False) -> RecommendationStore:
 
 # ── provider routing ──────────────────────────────────────────────────────────
 
-def test_grok_is_an_llm_provider():
-    assert "grok" in _LLM_PROVIDERS
-    assert set(_LLM_PROVIDERS) >= {"gemini", "grok", "ollama", "auto"}
+def test_all_llm_providers_registered():
+    assert set(_LLM_PROVIDERS) >= {"gemini", "grok", "openrouter", "ollama", "auto"}
+
+
+def test_openrouter_provider_reaches_llm(tmp_path):
+    """SUMMARY_PROVIDER=openrouter (free open-source models) must use the LLM."""
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
+    with patch("app.chat.generate_narrative", return_value="open-source answer") as gen:
+        answer, error, source = answer_question(
+            store, settings, "summarize the overall picture of the data")
+    assert gen.called
+    assert answer == "open-source answer"
+    assert source == "llm"
 
 
 def test_grok_provider_reaches_llm(tmp_path):

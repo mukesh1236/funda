@@ -101,6 +101,26 @@ CREATE TABLE IF NOT EXISTS metrics_daily (
     visitors INTEGER NOT NULL DEFAULT 0    -- first-time (new-cookie) visitors
 );
 
+-- Complete fund portfolios from SEC N-PORT filings (or the yfinance top-10
+-- fallback). Replaced wholesale per (fund) on each refresh.
+CREATE TABLE IF NOT EXISTS fund_holdings (
+    fund    TEXT NOT NULL COLLATE NOCASE,
+    ticker  TEXT,
+    cusip   TEXT,
+    name    TEXT NOT NULL,
+    weight  REAL NOT NULL,
+    as_of   TEXT,
+    source  TEXT NOT NULL DEFAULT 'nport'   -- 'nport' | 'yfinance_top10'
+);
+CREATE INDEX IF NOT EXISTS idx_fund_holdings_fund ON fund_holdings(fund);
+
+-- Permanent CUSIP -> ticker mappings (resolved once via OpenFIGI/search).
+CREATE TABLE IF NOT EXISTS security_ids (
+    cusip   TEXT PRIMARY KEY,
+    ticker  TEXT,
+    name    TEXT
+);
+
 CREATE TABLE IF NOT EXISTS fund_portfolio (
     id       INTEGER PRIMARY KEY,
     user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -545,6 +565,56 @@ class RecommendationStore:
                 (user_id,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── fund holdings (N-PORT / fallback) ────────────────────────────────────
+    def replace_fund_holdings(self, fund: str, holdings: List[dict],
+                               as_of: Optional[str], source: str) -> int:
+        """Replace the stored portfolio for one fund in a single transaction."""
+        fund = fund.upper().strip()
+        with _write_lock, self._connect() as conn:
+            conn.execute("DELETE FROM fund_holdings WHERE fund = ?", (fund,))
+            conn.executemany(
+                "INSERT INTO fund_holdings (fund, ticker, cusip, name, weight, as_of, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(fund, h.get("ticker"), h.get("cusip"), h.get("name") or "?",
+                  h.get("weight") or 0.0, as_of, source) for h in holdings],
+            )
+        return len(holdings)
+
+    def get_fund_holdings_stored(self, fund: str) -> List[dict]:
+        """Stored portfolio rows for a fund, heaviest first ([] if never fetched)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT ticker, cusip, name, weight, as_of, source FROM fund_holdings "
+                "WHERE fund = ? ORDER BY weight DESC",
+                (fund.upper().strip(),),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def upsert_security_ids(self, mapping: dict) -> None:
+        """Persist CUSIP→ticker resolutions permanently ({cusip: ticker})."""
+        if not mapping:
+            return
+        with _write_lock, self._connect() as conn:
+            conn.executemany(
+                "INSERT INTO security_ids (cusip, ticker) VALUES (?, ?) "
+                "ON CONFLICT(cusip) DO UPDATE SET ticker = excluded.ticker",
+                list(mapping.items()),
+            )
+
+    def get_security_ids(self, cusips: List[str]) -> dict:
+        """{cusip: ticker} for already-resolved CUSIPs."""
+        cusips = [c for c in cusips if c]
+        if not cusips:
+            return {}
+        marks = ",".join("?" * len(cusips))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT cusip, ticker FROM security_ids WHERE cusip IN ({marks}) "
+                "AND ticker IS NOT NULL",
+                cusips,
+            ).fetchall()
+        return {r["cusip"]: r["ticker"] for r in rows}
 
     def outcome_counts(self, symbol: str) -> dict:
         """{status: count} of resolved outcomes for a symbol — feeds hit-rate."""

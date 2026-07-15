@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 _MAX_FEED = 40        # cap LLM context size to stay within free-tier limits
 _MAX_LB = 20
 _MAX_NAMED = 12
-_LLM_PROVIDERS = ("gemini", "grok", "ollama", "auto")
+_LLM_PROVIDERS = ("gemini", "grok", "openrouter", "ollama", "auto")
 
 
 # ── shared formatting ─────────────────────────────────────────────────────────
@@ -328,6 +328,15 @@ def _build_fund_context(symbol: str) -> str:
             top_s = sorted(sectors.items(), key=lambda x: x[1], reverse=True)[:3]
             s_text = ", ".join(f"{k} {v:.1f}%" for k, v in top_s)
             parts.append(f"Top sectors: {s_text}")
+
+        # Pareto return-driver headline, if already computed (never blocks chat).
+        try:
+            from app.funds import drivers_headline_cached
+            headline = drivers_headline_cached(symbol)
+            if headline:
+                parts.append(f"Return drivers: {headline}")
+        except Exception:
+            pass
         return "\n".join(parts)
     except Exception as e:
         logger.debug("_build_fund_context(%s): %s", symbol, e)
