@@ -470,6 +470,20 @@ class ChatResponse(BaseModel):
     source: str = "llm"   # llm | fund-data | rule | overview — which layer answered
 
 
+# ── Generic stock overview (any ticker, tracked or not) ──────────────────────
+
+class StockOverview(BaseModel):
+    symbol: str
+    company_name: Optional[str] = None
+    price: Optional[float] = None
+    returns: Optional[Returns] = None
+    fundamentals: Optional[Fundamentals] = None
+    ownership: Optional[Ownership] = None
+    news: List[NewsItem] = []
+    insider_trades: List[InsiderTrade] = []
+    tracked: bool = False   # True when the symbol is in the analyst feed universe
+
+
 # ── Fund return drivers (Pareto attribution) ─────────────────────────────────
 
 class FundDriverItem(BaseModel):

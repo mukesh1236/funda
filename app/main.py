@@ -351,6 +351,24 @@ def leaderboard(
     return result
 
 
+@app.get("/api/stocks/{symbol}")
+def stock_overview(symbol: str):
+    """Generic finance-site info for ANY ticker — price, profile, fundamentals,
+    ownership, news, insider trades — even when we track no analyst
+    recommendations for it (e.g. a global-search hit outside the universe)."""
+    from app.service import build_stock_overview
+
+    try:
+        sym = normalize_symbol(symbol)
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e))
+    overview = build_stock_overview(sym)
+    if overview is None:
+        raise HTTPException(404, detail=f"'{sym}' did not resolve to a known ticker.")
+    overview.tracked = sym.upper() in {s.upper() for s in settings.universe("us") + settings.universe("in")}
+    return overview
+
+
 @app.get("/api/recommendations/{symbol}", response_model=StockDetailResult)
 def detail(symbol: str):
     try:

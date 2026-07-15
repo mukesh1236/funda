@@ -337,10 +337,63 @@ async function openSymbol(sym) {
   // Switch to feed, ensure it's loaded, then open the detail panel for sym.
   if (view !== 'feed') { view = 'feed'; await loadFeed().catch(() => {}); }
   const tr = document.querySelector(`tr.row[data-sym="${sym}"]`);
-  if (!tr) return;
+  if (!tr) { return showStockOverview(sym); }   // not tracked → generic stock page
   tr.scrollIntoView({ behavior: 'smooth', block: 'center' });
   const exp = document.querySelector(`tr.expand[data-for="${sym}"]`);
   if (exp && exp.style.display === 'none') await toggleExpand(tr);
+}
+
+async function showStockOverview(sym) {
+  // Generic finance-site page for ANY ticker — shown when a global-search hit
+  // isn't in the tracked analyst universe, instead of a silent dead end.
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  $('#highlights').innerHTML = '';
+  $('#status').textContent = '';
+  $('#content').innerHTML = `<div class="loading">Loading ${esc(sym)}…</div>`;
+  _chatSymbol = sym;
+  try {
+    const d = await getJSON('/api/stocks/' + encodeURIComponent(sym));
+    const r = d.returns || {};
+    const retChip = (label, v) => v == null ? '' :
+      `<span class="ov-ret"><span class="muted">${label}</span> ${ret(v)}</span>`;
+    const news = (d.news || []).slice(0, 6).map(n => `
+      <div class="news">${n.url ? `<a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a>`
+                                  : esc(n.title)}
+        ${n.source ? `<span class="src"> — ${esc(n.source)}</span>` : ''}</div>`).join('');
+    const trades = (d.insider_trades || []).slice(0, 5).map(t => `
+      <div class="news">${esc(t.insider)}${t.role ? ` <span class="src">(${esc(t.role)})</span>` : ''}
+        <span class="${t.action === 'Buy' ? 'r-pos' : 'r-neg'}">${esc(t.action)}</span>
+        ${t.shares ? esc(String(t.shares)) + ' sh' : ''} <span class="src">${esc(t.date || '')}</span></div>`).join('');
+    $('#content').innerHTML = `
+      <div class="stock-overview">
+        <button class="ghost-btn ov-back" id="ovBack">← Back to feed</button>
+        <div class="ov-head">
+          ${tickAvatar(d.symbol)}
+          <div>
+            <div class="ov-name">${esc(d.company_name || d.symbol)}</div>
+            <div class="muted">${esc(d.symbol)}
+              ${d.fundamentals && d.fundamentals.sector ? ' · ' + esc(d.fundamentals.sector) : ''}
+              ${d.fundamentals && d.fundamentals.industry ? ' · ' + esc(d.fundamentals.industry) : ''}</div>
+          </div>
+          <div class="ov-price">${d.price != null ? '$' + d.price : ''}</div>
+        </div>
+        <div class="ov-rets">
+          ${retChip('1M', r.one_month)}${retChip('3M', r.three_month)}
+          ${retChip('6M', r.six_month)}${retChip('1Y', r.twelve_month)}
+        </div>
+        ${d.tracked ? '' : `<p class="sre-note">ℹ ${esc(d.symbol)} isn't in the tracked analyst universe, so
+          there's no buy/sell consensus here — this is its general profile. You can still add it
+          to your watchlist, and ask the AI about it.</p>`}
+        ${d.fundamentals ? renderFundamentals(d.fundamentals) : ''}
+        ${d.ownership ? renderOwnership(d.ownership) : ''}
+        ${news ? `<div class="ovsec"><h4>Recent news</h4>${news}</div>` : ''}
+        ${trades ? `<div class="ovsec"><h4>Insider activity</h4>${trades}</div>` : ''}
+      </div>`;
+    const back = document.getElementById('ovBack');
+    if (back) back.addEventListener('click', () => { view = 'feed'; render(); });
+  } catch (e) {
+    $('#content').innerHTML = `<div class="empty">Could not load ${esc(sym)}: ${esc(e.message)}</div>`;
+  }
 }
 
 async function toggleExpand(tr) {
