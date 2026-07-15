@@ -812,7 +812,10 @@ function render() {
 
 document.querySelectorAll('.tab').forEach(t =>
   t.addEventListener('click', () => {
-    if (view !== t.dataset.view) { for (const k in detailCache) delete detailCache[k]; _chatSymbol = null; }
+    // Keep detailCache across tab switches — a stock you already opened this
+    // session should stay instant when you come back to it. Only "Refresh
+    // now" and logout actually invalidate it (data genuinely changed).
+    if (view !== t.dataset.view) { _chatSymbol = null; }
     view = t.dataset.view; render();
   }));
 $('#days').addEventListener('change', () => { if (view === 'feed') loadFeed(); });
@@ -1535,6 +1538,22 @@ async function _loadAIUsage() {
 VIEWS.sre = loadSRE;
 
 // ── Global search (topbar) ───────────────────────────────────────────────────
+// Visible "memory" of searched items — a per-browser recently-searched list
+// on top of the server-side detail/overview caches (the invisible speed
+// win). Clicking a recent item re-opens a symbol that's very likely still
+// warm in those server caches, so it feels instant.
+const _RECENT_KEY = 'alpha_recent_searches';
+function _getRecentSearches() {
+  try { return JSON.parse(localStorage.getItem(_RECENT_KEY) || '[]'); }
+  catch (e) { return []; }
+}
+function _rememberSearch(sym, name) {
+  if (!sym) return;
+  const list = _getRecentSearches().filter((r) => r.symbol !== sym);
+  list.unshift({ symbol: sym, name: name || '' });
+  try { localStorage.setItem(_RECENT_KEY, JSON.stringify(list.slice(0, 8))); } catch (e) {}
+}
+
 (function initGlobalSearch() {
   const inp = document.getElementById('globalSearch');
   const drop = document.getElementById('globalSearchDrop');
@@ -1543,26 +1562,42 @@ VIEWS.sre = loadSRE;
 
   function close() { drop.innerHTML = ''; drop.classList.remove('open'); }
 
+  function renderHits(hits, label) {
+    if (!hits.length) { close(); return; }
+    const heading = label ? `<div class="search-drop-label">${esc(label)}</div>` : '';
+    drop.innerHTML = heading + hits.map((r) => `
+      <button class="search-hit" data-sym="${esc(r.symbol)}" data-name="${esc(r.name || '')}">
+        <span class="sym">${esc(r.symbol)}</span>
+        <span class="nm">${esc(r.name || '')}</span></button>`).join('');
+    drop.classList.add('open');
+    drop.querySelectorAll('.search-hit').forEach((b) =>
+      b.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        _rememberSearch(b.dataset.sym, b.dataset.name);
+        close(); inp.value = '';
+        openSymbol(b.dataset.sym);
+      }));
+  }
+
+  inp.addEventListener('focus', () => {
+    if (!inp.value.trim()) {
+      const recent = _getRecentSearches();
+      if (recent.length) renderHits(recent, 'Recently searched');
+    }
+  });
+
   inp.addEventListener('input', () => {
     clearTimeout(timer);
     const q = inp.value.trim();
-    if (q.length < 2) { close(); return; }
+    if (q.length < 2) {
+      const recent = _getRecentSearches();
+      if (recent.length) renderHits(recent, 'Recently searched'); else close();
+      return;
+    }
     timer = setTimeout(async () => {
       try {
         const data = await getJSON(`/api/search?q=${encodeURIComponent(q)}&market=${currentMarket()}`);
-        const hits = (data.results || []).slice(0, 8);
-        if (!hits.length) { close(); return; }
-        drop.innerHTML = hits.map((r) => `
-          <button class="search-hit" data-sym="${esc(r.symbol)}">
-            <span class="sym">${esc(r.symbol)}</span>
-            <span class="nm">${esc(r.name || '')}</span></button>`).join('');
-        drop.classList.add('open');
-        drop.querySelectorAll('.search-hit').forEach((b) =>
-          b.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            close(); inp.value = '';
-            openSymbol(b.dataset.sym);
-          }));
+        renderHits((data.results || []).slice(0, 8), null);
       } catch (e) { close(); }
     }, 250);
   });
@@ -1572,7 +1607,10 @@ VIEWS.sre = loadSRE;
     if (e.key === 'Enter') {
       e.preventDefault();
       const first = drop.querySelector('.search-hit');
-      if (first) { close(); inp.value = ''; openSymbol(first.dataset.sym); }
+      if (first) {
+        _rememberSearch(first.dataset.sym, first.dataset.name);
+        close(); inp.value = ''; openSymbol(first.dataset.sym);
+      }
     }
   });
 })();

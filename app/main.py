@@ -520,6 +520,9 @@ def chat(req: ChatRequest):
 def _run_daily_and_invalidate():
     run_daily(store, settings)
     _RESPONSE_CACHE.clear()   # let freshly collected data show up immediately
+    from app.service import _DETAIL_CACHE, _OVERVIEW_CACHE
+    _DETAIL_CACHE.clear()
+    _OVERVIEW_CACHE.clear()
 
 
 @app.post("/api/recommendations/refresh", response_model=RefreshResult)

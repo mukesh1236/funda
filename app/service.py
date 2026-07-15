@@ -335,7 +335,30 @@ def _highlights(
     )
 
 
+# Aggregate cache for the analyst-detail panel — mirrors _OVERVIEW_CACHE.
+# A cache HIT here skips 4 parallel network fetches + summary generation
+# entirely, and is shared across every user hitting this process, not just
+# one browser tab (unlike the frontend's detailCache).
+_DETAIL_CACHE: Dict[str, Tuple[float, StockDetailResult]] = {}
+_DETAIL_TTL = 600   # 10 min — matches _OVERVIEW_CACHE for consistency
+
+
 def build_detail(
+    store: RecommendationStore, symbol: str, settings=None
+) -> Optional[StockDetailResult]:
+    sym_key = symbol.upper().strip()
+    cached = _DETAIL_CACHE.get(sym_key)
+    if cached and time.time() - cached[0] < _DETAIL_TTL:
+        return cached[1]
+
+    result = _build_detail_uncached(store, symbol, settings)
+    if result is not None:
+        # Don't memorize "not found" — a typo shouldn't stay stuck for 10 min.
+        _DETAIL_CACHE[sym_key] = (time.time(), result)
+    return result
+
+
+def _build_detail_uncached(
     store: RecommendationStore, symbol: str, settings=None
 ) -> Optional[StockDetailResult]:
     recs = store.list_for_symbol(symbol)
