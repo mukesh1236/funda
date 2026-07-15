@@ -95,6 +95,31 @@ CREATE TABLE IF NOT EXISTS job_lock (
     last_run TEXT NOT NULL
 );
 
+-- One row per LLM call (any provider) — powers the AI-usage observability
+-- panel: tokens, latency, success/fallback rates, recent errors.
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts                TEXT NOT NULL,
+    provider          TEXT NOT NULL,
+    model             TEXT,
+    ok                INTEGER NOT NULL,
+    latency_ms        REAL,
+    prompt_tokens     INTEGER,
+    completion_tokens INTEGER,
+    error             TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_ts ON llm_calls(ts);
+
+-- One row per chat answer: which layer answered (llm | rule | overview |
+-- fund-data). Fallback RATE is the single best "is the AI feature healthy"
+-- signal — availability metrics alone miss silent degradation.
+CREATE TABLE IF NOT EXISTS chat_answers (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts     TEXT NOT NULL,
+    source TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_answers_ts ON chat_answers(ts);
+
 CREATE TABLE IF NOT EXISTS metrics_daily (
     day      TEXT PRIMARY KEY,   -- "YYYY-MM-DD"
     hits     INTEGER NOT NULL DEFAULT 0,   -- app page loads that day
@@ -565,6 +590,97 @@ class RecommendationStore:
                 (user_id,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── chat answer sources (fallback-rate tracking) ─────────────────────────
+    def add_chat_answer(self, source: str) -> None:
+        with _write_lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO chat_answers (ts, source) VALUES (?, ?)",
+                (datetime.now(timezone.utc).isoformat(timespec="seconds"), source),
+            )
+
+    def chat_source_stats(self, days: int = 7) -> dict:
+        """{total, by_source: {source: n}, fallback_rate} over the window.
+        fallback_rate = share of answers NOT produced by the LLM."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT source, COUNT(*) AS n FROM chat_answers WHERE ts >= ? "
+                "GROUP BY source", (cutoff,),
+            ).fetchall()
+        by_source = {r["source"]: r["n"] for r in rows}
+        total = sum(by_source.values())
+        non_llm = sum(n for s, n in by_source.items() if s != "llm")
+        return {
+            "total": total,
+            "by_source": by_source,
+            "fallback_rate": round(non_llm / total, 3) if total else None,
+        }
+
+    # ── LLM call metrics (AI observability) ──────────────────────────────────
+    def add_llm_call(self, provider: str, model: Optional[str], ok: bool,
+                      latency_ms: Optional[float], prompt_tokens: Optional[int],
+                      completion_tokens: Optional[int], error: Optional[str]) -> None:
+        with _write_lock, self._connect() as conn:
+            conn.execute(
+                """INSERT INTO llm_calls
+                   (ts, provider, model, ok, latency_ms, prompt_tokens,
+                    completion_tokens, error)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                 provider, model, int(ok), latency_ms, prompt_tokens,
+                 completion_tokens, error),
+            )
+
+    def llm_stats(self, days: int = 7) -> dict:
+        """Aggregated AI usage for the observability panel: totals, success
+        rate, latency, tokens — overall, per model, and recent failures."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+        today = datetime.now(timezone.utc).date().isoformat()
+        with self._connect() as conn:
+            overall = conn.execute(
+                """SELECT COUNT(*) AS calls,
+                          SUM(ok) AS ok_calls,
+                          AVG(CASE WHEN ok=1 THEN latency_ms END) AS avg_latency_ms,
+                          MAX(CASE WHEN ok=1 THEN latency_ms END) AS max_latency_ms,
+                          SUM(COALESCE(prompt_tokens,0)) AS prompt_tokens,
+                          SUM(COALESCE(completion_tokens,0)) AS completion_tokens
+                   FROM llm_calls WHERE ts >= ?""", (cutoff,)).fetchone()
+            today_row = conn.execute(
+                """SELECT COUNT(*) AS calls,
+                          SUM(COALESCE(prompt_tokens,0) + COALESCE(completion_tokens,0)) AS tokens
+                   FROM llm_calls WHERE substr(ts,1,10) = ?""", (today,)).fetchone()
+            by_model = conn.execute(
+                """SELECT provider, model, COUNT(*) AS calls, SUM(ok) AS ok_calls,
+                          AVG(CASE WHEN ok=1 THEN latency_ms END) AS avg_latency_ms,
+                          SUM(COALESCE(prompt_tokens,0) + COALESCE(completion_tokens,0)) AS tokens
+                   FROM llm_calls WHERE ts >= ?
+                   GROUP BY provider, model ORDER BY calls DESC""", (cutoff,)).fetchall()
+            recent_errors = conn.execute(
+                """SELECT ts, provider, model, error FROM llm_calls
+                   WHERE ok = 0 AND error IS NOT NULL
+                   ORDER BY ts DESC LIMIT 8""").fetchall()
+            latency_series = conn.execute(
+                """SELECT latency_ms FROM llm_calls
+                   WHERE ok = 1 AND latency_ms IS NOT NULL
+                   ORDER BY ts DESC LIMIT 40""").fetchall()
+
+        calls = overall["calls"] or 0
+        ok_calls = overall["ok_calls"] or 0
+        return {
+            "window_days": days,
+            "calls": calls,
+            "success_rate": round(ok_calls / calls, 3) if calls else None,
+            "avg_latency_ms": round(overall["avg_latency_ms"], 0) if overall["avg_latency_ms"] else None,
+            "max_latency_ms": round(overall["max_latency_ms"], 0) if overall["max_latency_ms"] else None,
+            "prompt_tokens": overall["prompt_tokens"] or 0,
+            "completion_tokens": overall["completion_tokens"] or 0,
+            "calls_today": today_row["calls"] or 0,
+            "tokens_today": today_row["tokens"] or 0,
+            "by_model": [dict(r) for r in by_model],
+            "recent_errors": [dict(r) for r in recent_errors],
+            "latency_series": [r["latency_ms"] for r in reversed(latency_series)],
+        }
 
     # ── fund holdings (N-PORT / fallback) ────────────────────────────────────
     def replace_fund_holdings(self, fund: str, holdings: List[dict],

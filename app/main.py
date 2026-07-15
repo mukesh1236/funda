@@ -64,6 +64,8 @@ from app.auth import (
 )
 from app.store import RecommendationStore
 from app.funds import router as funds_router
+from app import llm as llm_mod
+from app import reqmetrics
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -127,6 +129,13 @@ async def lifespan(app: FastAPI):
                 replace_existing=True,
                 next_run_time=datetime.now(),  # warm immediately on startup
             )
+            from app.alerts import check_alerts
+            _scheduler.add_job(
+                lambda: check_alerts(store, settings),
+                IntervalTrigger(minutes=15),
+                id="threshold_alerts",
+                replace_existing=True,
+            )
             _scheduler.start()
             logger.info(
                 "Scheduler started — daily run at %02d:%02d local time.",
@@ -152,15 +161,17 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 @app.middleware("http")
 async def timing(request: Request, call_next):
-    """Expose per-request latency (Server-Timing shows in browser dev tools)
-    and log anything slower than 1s so regressions are visible."""
+    """Expose per-request latency (Server-Timing shows in browser dev tools),
+    log anything slower than 1s, and feed the real SRE metrics buffer."""
     start = time.perf_counter()
     response = await call_next(request)
     dur_ms = (time.perf_counter() - start) * 1000
     response.headers["Server-Timing"] = f"app;dur={dur_ms:.0f}"
-    if dur_ms > 1000 and request.url.path.startswith("/api"):
-        logger.warning("slow request: %s %s → %.0f ms",
-                       request.method, request.url.path, dur_ms)
+    if request.url.path.startswith("/api"):
+        reqmetrics.record(request.url.path, response.status_code, dur_ms)
+        if dur_ms > 1000:
+            logger.warning("slow request: %s %s → %.0f ms",
+                           request.method, request.url.path, dur_ms)
     return response
 
 
@@ -214,6 +225,9 @@ def health():
             "gemini_model": settings.gemini_model,
             "openrouter_key_set": bool(settings.openrouter_api_key),
             "openrouter_model": settings.openrouter_model,
+            # Why the most recent LLM call failed (None = last call succeeded).
+            # First place to look when chat shows fallback answers.
+            "last_error": llm_mod.last_gemini_error,
         },
     }
 
@@ -309,6 +323,32 @@ def admin_stats(_: dict = Depends(require_admin)):
     return store.admin_stats()
 
 
+@app.get("/api/admin/ai-stats")
+def admin_ai_stats(days: int = Query(7, ge=1, le=90), _: dict = Depends(require_admin)):
+    """AI observability — calls, tokens, latency, success rate, per-model
+    breakdown, and recent failures. Admin only."""
+    stats = store.llm_stats(days=days)
+    stats["provider_configured"] = settings.summary_provider
+    stats["last_error"] = llm_mod.last_gemini_error
+    return stats
+
+
+@app.get("/api/admin/sre-metrics")
+def admin_sre_metrics(_: dict = Depends(require_admin)):
+    """Real service reliability data for the SRE dashboard — request metrics
+    from live traffic, data-freshness SLO, AI budget burn, chat answer-source
+    mix, and the alert history. Admin only. Nothing here is synthetic."""
+    from app.alerts import ai_budget, data_freshness, recent_alerts
+
+    return {
+        "requests": reqmetrics.summary(),
+        "freshness": data_freshness(store, settings),
+        "ai_budget": ai_budget(store, settings),
+        "chat_sources": store.chat_source_stats(days=7),
+        "alerts": recent_alerts(20),
+    }
+
+
 @app.get("/api/themes", response_model=ThemesResult)
 def themes(market: str = Query("us", pattern="^(us|in)$")):
     """Available thematic segments for a market: US (AI, Semiconductors, ...)
@@ -345,6 +385,24 @@ def leaderboard(
     result = build_leaderboard(store, metric=metric, limit=limit, market=market)
     _RESPONSE_CACHE[key] = result
     return result
+
+
+@app.get("/api/stocks/{symbol}")
+def stock_overview(symbol: str):
+    """Generic finance-site info for ANY ticker — price, profile, fundamentals,
+    ownership, news, insider trades — even when we track no analyst
+    recommendations for it (e.g. a global-search hit outside the universe)."""
+    from app.service import build_stock_overview
+
+    try:
+        sym = normalize_symbol(symbol)
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e))
+    overview = build_stock_overview(sym)
+    if overview is None:
+        raise HTTPException(404, detail=f"'{sym}' did not resolve to a known ticker.")
+    overview.tracked = sym.upper() in {s.upper() for s in settings.universe("us") + settings.universe("in")}
+    return overview
 
 
 @app.get("/api/recommendations/{symbol}", response_model=StockDetailResult)
@@ -452,12 +510,19 @@ def chat(req: ChatRequest):
     )
     if error:
         raise HTTPException(503, detail=error)
+    try:
+        store.add_chat_answer(source)   # feeds the fallback-rate SLO
+    except Exception as e:
+        logger.debug("chat answer telemetry skipped: %s", e)
     return ChatResponse(answer=answer, source=source)
 
 
 def _run_daily_and_invalidate():
     run_daily(store, settings)
     _RESPONSE_CACHE.clear()   # let freshly collected data show up immediately
+    from app.service import _DETAIL_CACHE, _OVERVIEW_CACHE
+    _DETAIL_CACHE.clear()
+    _OVERVIEW_CACHE.clear()
 
 
 @app.post("/api/recommendations/refresh", response_model=RefreshResult)

@@ -35,7 +35,7 @@ from app.models import (
 )
 from app.sources.fundamentals import build_fundamentals_notes, fetch_fundamentals
 from app.sources.prices import get_current_price
-from app.sources.profiles import fetch_ownership, get_price_history
+from app.sources.profiles import fetch_ownership, fetch_profile, get_price_history
 from app.sources.yahoo import get_news
 from app.store import RecommendationStore
 from app.themes import INDIA_THEMES, THEMES, market_of, themes_for, tickers_for
@@ -335,7 +335,30 @@ def _highlights(
     )
 
 
+# Aggregate cache for the analyst-detail panel — mirrors _OVERVIEW_CACHE.
+# A cache HIT here skips 4 parallel network fetches + summary generation
+# entirely, and is shared across every user hitting this process, not just
+# one browser tab (unlike the frontend's detailCache).
+_DETAIL_CACHE: Dict[str, Tuple[float, StockDetailResult]] = {}
+_DETAIL_TTL = 600   # 10 min — matches _OVERVIEW_CACHE for consistency
+
+
 def build_detail(
+    store: RecommendationStore, symbol: str, settings=None
+) -> Optional[StockDetailResult]:
+    sym_key = symbol.upper().strip()
+    cached = _DETAIL_CACHE.get(sym_key)
+    if cached and time.time() - cached[0] < _DETAIL_TTL:
+        return cached[1]
+
+    result = _build_detail_uncached(store, symbol, settings)
+    if result is not None:
+        # Don't memorize "not found" — a typo shouldn't stay stuck for 10 min.
+        _DETAIL_CACHE[sym_key] = (time.time(), result)
+    return result
+
+
+def _build_detail_uncached(
     store: RecommendationStore, symbol: str, settings=None
 ) -> Optional[StockDetailResult]:
     recs = store.list_for_symbol(symbol)
@@ -419,6 +442,75 @@ def build_detail(
     from app.summarize import build_summary
     detail.summary = build_summary(detail, settings or get_settings())
     return detail
+
+
+_OVERVIEW_CACHE: Dict[str, Tuple[float, "StockOverview"]] = {}
+_OVERVIEW_TTL = 600   # 10 min — generic data, doesn't need to be tick-fresh
+
+
+def build_stock_overview(symbol: str):
+    """Generic profile for ANY ticker — the finance-site basics (price,
+    company, fundamentals, ownership, news, insider trades) — independent of
+    whether we track analyst recommendations for it. Returns None only when
+    every source comes back empty (i.e. the ticker doesn't resolve)."""
+    from app.models import InsiderTrade, StockOverview
+    from app.sources.sec_insider import fetch_insider_trades
+
+    sym = symbol.upper().strip()
+    now = time.time()
+    cached = _OVERVIEW_CACHE.get(sym)
+    if cached and now - cached[0] < _OVERVIEW_TTL:
+        return cached[1]
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        f_prof = ex.submit(fetch_profile, sym)
+        f_price = ex.submit(get_current_price, sym)
+        f_fund = ex.submit(fetch_fundamentals, sym)
+        f_news = ex.submit(get_news, sym)
+        f_own = ex.submit(fetch_ownership, sym)
+        f_ins = ex.submit(fetch_insider_trades, sym)
+        prof, price, fmap, news_raw, own, raw_trades = (
+            f_prof.result(), f_price.result(), f_fund.result(),
+            f_news.result(), f_own.result(), f_ins.result(),
+        )
+
+    name = (prof or {}).get("company_name")
+    if name is None and price is None and not fmap:
+        return None   # nothing resolves — likely not a real ticker
+
+    rets = (prof or {}).get("returns") or {}
+    returns = Returns(
+        one_month=rets.get("one_month"), three_month=rets.get("three_month"),
+        six_month=rets.get("six_month"), twelve_month=rets.get("twelve_month"),
+    )
+    fundamentals = Fundamentals(
+        pe_ratio=fmap.get("pe_ratio"), forward_pe=fmap.get("forward_pe"),
+        peg_ratio=fmap.get("peg_ratio"), eps=fmap.get("eps"),
+        market_cap=fmap.get("market_cap"), revenue_growth=fmap.get("revenue_growth"),
+        profit_margin=fmap.get("profit_margin"), roe=fmap.get("roe"),
+        debt_to_equity=fmap.get("debt_to_equity"), dividend_yield=fmap.get("dividend_yield"),
+        beta=fmap.get("beta"), price_to_book=fmap.get("price_to_book"),
+        week52_low=fmap.get("week52_low"), week52_high=fmap.get("week52_high"),
+        sector=fmap.get("sector"), industry=fmap.get("industry"),
+        notes=build_fundamentals_notes(fmap),
+    ) if fmap else None
+    ownership = Ownership(
+        inst_pct=own.get("inst_pct"), insider_pct=own.get("insider_pct"),
+        fund_holders=own.get("fund_holders"),
+        institutions=[Holder(**h) for h in own.get("institutions", [])[:8]],
+        funds=[Holder(**h) for h in own.get("funds", [])[:8]],
+        recent_buyers=[Holder(**h) for h in own.get("recent_buyers", [])[:6]],
+    )
+
+    overview = StockOverview(
+        symbol=sym, company_name=name,
+        price=round(price, 2) if price is not None else None,
+        returns=returns, fundamentals=fundamentals, ownership=ownership,
+        news=[NewsItem(**n) for n in news_raw],
+        insider_trades=[InsiderTrade(**t) for t in raw_trades],
+    )
+    _OVERVIEW_CACHE[sym] = (now, overview)
+    return overview
 
 
 def build_market_digest(settings, market: str = "us") -> MarketDigest:

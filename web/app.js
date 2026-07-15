@@ -337,10 +337,63 @@ async function openSymbol(sym) {
   // Switch to feed, ensure it's loaded, then open the detail panel for sym.
   if (view !== 'feed') { view = 'feed'; await loadFeed().catch(() => {}); }
   const tr = document.querySelector(`tr.row[data-sym="${sym}"]`);
-  if (!tr) return;
+  if (!tr) { return showStockOverview(sym); }   // not tracked → generic stock page
   tr.scrollIntoView({ behavior: 'smooth', block: 'center' });
   const exp = document.querySelector(`tr.expand[data-for="${sym}"]`);
   if (exp && exp.style.display === 'none') await toggleExpand(tr);
+}
+
+async function showStockOverview(sym) {
+  // Generic finance-site page for ANY ticker — shown when a global-search hit
+  // isn't in the tracked analyst universe, instead of a silent dead end.
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  $('#highlights').innerHTML = '';
+  $('#status').textContent = '';
+  $('#content').innerHTML = `<div class="loading">Loading ${esc(sym)}…</div>`;
+  _chatSymbol = sym;
+  try {
+    const d = await getJSON('/api/stocks/' + encodeURIComponent(sym));
+    const r = d.returns || {};
+    const retChip = (label, v) => v == null ? '' :
+      `<span class="ov-ret"><span class="muted">${label}</span> ${ret(v)}</span>`;
+    const news = (d.news || []).slice(0, 6).map(n => `
+      <div class="news">${n.url ? `<a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a>`
+                                  : esc(n.title)}
+        ${n.source ? `<span class="src"> — ${esc(n.source)}</span>` : ''}</div>`).join('');
+    const trades = (d.insider_trades || []).slice(0, 5).map(t => `
+      <div class="news">${esc(t.insider)}${t.role ? ` <span class="src">(${esc(t.role)})</span>` : ''}
+        <span class="${t.action === 'Buy' ? 'r-pos' : 'r-neg'}">${esc(t.action)}</span>
+        ${t.shares ? esc(String(t.shares)) + ' sh' : ''} <span class="src">${esc(t.date || '')}</span></div>`).join('');
+    $('#content').innerHTML = `
+      <div class="stock-overview">
+        <button class="ghost-btn ov-back" id="ovBack">← Back to feed</button>
+        <div class="ov-head">
+          ${tickAvatar(d.symbol)}
+          <div>
+            <div class="ov-name">${esc(d.company_name || d.symbol)}</div>
+            <div class="muted">${esc(d.symbol)}
+              ${d.fundamentals && d.fundamentals.sector ? ' · ' + esc(d.fundamentals.sector) : ''}
+              ${d.fundamentals && d.fundamentals.industry ? ' · ' + esc(d.fundamentals.industry) : ''}</div>
+          </div>
+          <div class="ov-price">${d.price != null ? '$' + d.price : ''}</div>
+        </div>
+        <div class="ov-rets">
+          ${retChip('1M', r.one_month)}${retChip('3M', r.three_month)}
+          ${retChip('6M', r.six_month)}${retChip('1Y', r.twelve_month)}
+        </div>
+        ${d.tracked ? '' : `<p class="sre-note">ℹ ${esc(d.symbol)} isn't in the tracked analyst universe, so
+          there's no buy/sell consensus here — this is its general profile. You can still add it
+          to your watchlist, and ask the AI about it.</p>`}
+        ${d.fundamentals ? renderFundamentals(d.fundamentals) : ''}
+        ${d.ownership ? renderOwnership(d.ownership) : ''}
+        ${news ? `<div class="ovsec"><h4>Recent news</h4>${news}</div>` : ''}
+        ${trades ? `<div class="ovsec"><h4>Insider activity</h4>${trades}</div>` : ''}
+      </div>`;
+    const back = document.getElementById('ovBack');
+    if (back) back.addEventListener('click', () => { view = 'feed'; render(); });
+  } catch (e) {
+    $('#content').innerHTML = `<div class="empty">Could not load ${esc(sym)}: ${esc(e.message)}</div>`;
+  }
 }
 
 async function toggleExpand(tr) {
@@ -759,7 +812,10 @@ function render() {
 
 document.querySelectorAll('.tab').forEach(t =>
   t.addEventListener('click', () => {
-    if (view !== t.dataset.view) { for (const k in detailCache) delete detailCache[k]; _chatSymbol = null; }
+    // Keep detailCache across tab switches — a stock you already opened this
+    // session should stay instant when you come back to it. Only "Refresh
+    // now" and logout actually invalidate it (data genuinely changed).
+    if (view !== t.dataset.view) { _chatSymbol = null; }
     view = t.dataset.view; render();
   }));
 $('#days').addEventListener('change', () => { if (view === 'feed') loadFeed(); });
@@ -791,7 +847,13 @@ function hideAuth() {
 // Reflect login state in the header: "Sign in" button vs. the user menu.
 function updateAuthUI() {
   const isAdmin = _currentUser && _currentUser.role === 'admin';
+  // Operations (SRE dashboard + Admin) is admin-only, not for every visitor.
+  const opsNav = document.getElementById('opsNav');
+  if (opsNav) opsNav.hidden = !isAdmin;
   $('#adminTab').hidden = !isAdmin;
+  const sreTab = document.getElementById('sreTab');
+  if (sreTab) sreTab.hidden = !isAdmin;
+  if (!isAdmin && (view === 'admin' || view === 'sre')) { view = 'feed'; render(); }
   if (_currentUser) {
     $('#userName').textContent = _currentUser.display_name || _currentUser.email;
     $('#userMenu').hidden = false;
@@ -799,7 +861,6 @@ function updateAuthUI() {
   } else {
     $('#userMenu').hidden = true;
     $('#signIn').hidden = false;
-    if (view === 'admin') { view = 'feed'; render(); }   // drop admin view on logout
   }
 }
 
@@ -905,7 +966,23 @@ $('#chatForm').addEventListener('submit', async (e) => {
   try {
     const body = { question: q, market: currentMarket() };
     if (_chatSymbol) body.symbol = _chatSymbol;
-    const res = await postJSON('/api/chat', body);
+    // Hard client-side timeout: a hung request must never leave the chat
+    // stuck on "Thinking…" forever.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 90000);
+    let res;
+    try {
+      const raw = await fetch(API + '/api/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body), signal: ctrl.signal,
+      });
+      if (!raw.ok) {
+        let detail = `chat → ${raw.status}`;
+        try { const j = await raw.json(); if (j.detail) detail = j.detail; } catch (e2) {}
+        throw new Error(detail);
+      }
+      res = await raw.json();
+    } finally { clearTimeout(timer); }
     thinking.classList.remove('pending');
     thinking.textContent = res.answer;
     // Make fallback answers visibly fallbacks — if the AI didn't answer,
@@ -921,7 +998,9 @@ $('#chatForm').addEventListener('submit', async (e) => {
   } catch (err) {
     thinking.classList.remove('pending');
     thinking.classList.add('err');
-    thinking.textContent = err.message || 'Could not reach the AI.';
+    thinking.textContent = err.name === 'AbortError'
+      ? 'The AI took too long to answer. Please try again — if this keeps happening, check /api/health → llm.last_error.'
+      : (err.message || 'Could not reach the AI.');
   } finally {
     $('#chatSend').disabled = false;
     $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
@@ -1240,18 +1319,7 @@ onLoggedIn = function(user) {
 // animation, and Ask-AI suggestion chips. Additive — nothing above changes.
 // ═════════════════════════════════════════════════════════════════════════════
 
-// ── SRE dashboard (demo data until a TeamOps deployment is reachable) ────────
-function _sreSeries(n, base, jitter, spike) {
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    let v = base + (Math.sin(i / 3.1) + Math.sin(i / 7.7)) * jitter * 0.4
-              + (Math.random() - 0.5) * jitter;
-    if (spike && i === spike.at) v = spike.v;
-    out.push(Math.max(0, v));
-  }
-  return out;
-}
-
+// ── SRE dashboard (REAL data from the app's own telemetry) ───────────────────
 function _sreLineChart(values, { fmt = (v) => v.toFixed(0), height = 74 } = {}) {
   const w = 300, h = height, pad = 4;
   const max = Math.max(...values) * 1.15 || 1, min = 0;
@@ -1276,87 +1344,216 @@ function _sreHeatCell(v, max) {
     title="${v.toFixed(2)}% errors"></span>`;
 }
 
+function _fmtUptime(seconds) {
+  if (seconds == null) return '—';
+  const d = Math.floor(seconds / 86400), h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
 async function loadSRE() {
   $('#highlights').innerHTML = '';
-  $('#status').textContent = 'Site reliability — uptime, latency, error rate, and incident flow.';
+  // Defense in depth: the nav item is hidden for non-admins, but guard the
+  // renderer too in case the view is reached some other way.
+  if (!_currentUser || _currentUser.role !== 'admin') {
+    $('#status').textContent = '';
+    $('#content').innerHTML =
+      '<div class="empty">🔒 The SRE dashboard is available to admins only.</div>';
+    return;
+  }
+  $('#status').textContent = 'Site reliability — live telemetry from this app’s own traffic and AI usage.';
+  $('#content').innerHTML = '<div class="loading">Loading live telemetry…</div>';
 
-  // Demo series (deterministic enough to look plausible)
-  const latency = _sreSeries(48, 640, 120, { at: 31, v: 1240 });
-  const errRate = _sreSeries(48, 0.4, 0.25, { at: 31, v: 1.9 });
-  const hourly  = _sreSeries(24, 0.35, 0.3, { at: 14, v: 1.6 });
-  const uptimePct = 99.72, uptimeSLO = 99.5;
-  const p95 = latency[latency.length - 1], p95SLO = 2000;
-  const errNow = errRate[errRate.length - 1];
+  let d;
+  try {
+    d = await getJSON('/api/admin/sre-metrics');
+  } catch (e) {
+    $('#content').innerHTML = `<div class="empty">Could not load SRE metrics: ${esc(e.message)}</div>`;
+    return;
+  }
+  const req = d.requests || {}, fresh = d.freshness || {}, budget = d.ai_budget || {};
+  const chat = d.chat_sources || {}, alerts = d.alerts || [];
 
   const slo = (label, actual, target, pct, cls) => `
     <div class="slo-row">
       <div class="slo-top"><span>${label}</span>
         <span><b>${actual}</b> <span class="muted">/ ${target}</span></span></div>
-      <div class="slo-bar"><div class="slo-fill ${cls}" style="width:${pct}%"></div></div>
+      <div class="slo-bar"><div class="slo-fill ${cls}" style="width:${Math.min(100, pct)}%"></div></div>
     </div>`;
 
-  const incidents = [
-    { id: 'INC-12', sev: 'sev2', title: 'funda: error rate spike', state: 'fixing',
-      owner: 'dev-2', opened: '08:14', sla: '14h left' },
-    { id: 'INC-11', sev: 'sev3', title: 'funda: latency over SLO', state: 'closed',
-      owner: 'sre-1', opened: 'yesterday', sla: 'met' },
-  ];
-  const active = incidents.filter((i) => i.state !== 'closed');
+  const err5 = req.error_rate_5xx != null ? (req.error_rate_5xx * 100) : null;
+  const maxHourly = Math.max(...(req.hourly_requests || [0]), 1);
+
+  // Budget gauge (calls; tokens too when a token budget is configured)
+  const burn = budget.call_burn_pct;
+  const burnCls = burn == null ? '' : burn >= 1 ? 'bad' : burn >= 0.8 ? 'warn' : '';
+  const budgetHtml = budget.call_budget ? slo(
+    'Daily AI call budget', `${budget.calls_today}`, `${budget.call_budget}`,
+    (burn || 0) * 100, burnCls) : '<p class="muted">No AI budget configured (AI_DAILY_CALL_BUDGET).</p>';
+  const tokenHtml = budget.token_budget ? slo(
+    'Daily token budget', (budget.tokens_today || 0).toLocaleString(),
+    budget.token_budget.toLocaleString(),
+    (budget.token_burn_pct || 0) * 100,
+    (budget.token_burn_pct || 0) >= 0.8 ? 'warn' : '') : '';
+
+  // Answer-source mix → fallback rate (the AI feature's real health metric)
+  const srcTotal = chat.total || 0;
+  const srcRow = (label, n, cls) => srcTotal ? `
+    <div class="slo-row"><div class="slo-top"><span>${label}</span><b>${n}</b></div>
+      <div class="slo-bar"><div class="slo-fill ${cls}" style="width:${(n / srcTotal * 100).toFixed(1)}%"></div></div>
+    </div>` : '';
+  const bySrc = chat.by_source || {};
+  const fbRate = chat.fallback_rate;
+
+  const alertRows = alerts.length ? alerts.map((a) => `
+    <div class="row"><span class="ts">${a.ts.slice(5, 16).replace('T', ' ')}</span>
+      <b>${esc(a.key)}</b> — ${esc(a.message)}</div>`).join('')
+    : '<p class="empty">No alerts fired. Thresholds: AI success <90%, budget ≥80%, daily job missed, 5xx >5%.</p>';
+
+  const slowRows = (req.slowest_endpoints || []).map((s) => `
+    <tr><td>${esc(s.endpoint)}</td><td>${s.count}</td><td>${Math.round(s.p95_ms)}ms</td></tr>`).join('')
+    || '<tr><td colspan="3" class="empty">Not enough traffic yet.</td></tr>';
 
   $('#content').innerHTML = `
-    <div class="sre-note">⚠ Demo data — connect a TeamOps deployment (see docs/TEAMOPS_DESIGN.md)
-      to stream live uptime, incidents, and SLOs for this app.</div>
-
     <div class="sre-grid">
       <div class="sre-card">
-        <h4>System uptime (30d)</h4>
-        <div class="sre-big">${uptimePct}%</div>
-        ${slo('Availability SLO', uptimePct + '%', uptimeSLO + '%',
-              Math.min(100, uptimePct / uptimeSLO * 100).toFixed(1),
-              uptimePct >= uptimeSLO ? '' : 'bad')}
+        <h4>Service (24h · live)</h4>
+        <div class="sre-big">${req.requests || 0}<span class="mini"> requests</span></div>
+        <div class="tile"><span>Process uptime</span><b>${_fmtUptime(req.process_uptime_seconds)}</b></div>
+        <div class="tile"><span>5xx error rate</span>
+          <b class="${err5 != null && err5 > 5 ? 'r-neg' : ''}">${err5 != null ? err5.toFixed(2) + '%' : '—'}</b></div>
+        <div class="tile"><span>4xx rate</span><b>${req.error_rate_4xx != null ? (req.error_rate_4xx * 100).toFixed(2) + '%' : '—'}</b></div>
       </div>
 
       <div class="sre-card">
-        <h4>p95 latency (48h) · ms</h4>
-        <div class="sre-big">${p95.toFixed(0)}<span class="mini"> ms</span></div>
-        ${_sreLineChart(latency)}
-        ${slo('Latency SLO', p95.toFixed(0) + 'ms', p95SLO + 'ms',
-              Math.min(100, (1 - p95 / p95SLO) * 100 + 50).toFixed(1),
-              p95 <= p95SLO ? '' : 'bad')}
+        <h4>API latency (24h · live)</h4>
+        <div class="sre-big">${req.p95_ms != null ? Math.round(req.p95_ms) + '<span class="mini"> ms p95</span>' : '—'}</div>
+        ${req.p95_series && req.p95_series.length > 1 ? _sreLineChart(req.p95_series) : ''}
+        <div class="tile"><span>p50 / p99</span>
+          <b>${req.p50_ms != null ? Math.round(req.p50_ms) + 'ms' : '—'} / ${req.p99_ms != null ? Math.round(req.p99_ms) + 'ms' : '—'}</b></div>
       </div>
 
       <div class="sre-card">
-        <h4>Error rate (48h) · %</h4>
-        <div class="sre-big">${errNow.toFixed(2)}<span class="mini"> %</span></div>
-        ${_sreLineChart(errRate, { fmt: (v) => v.toFixed(2) + '%' })}
+        <h4>Data freshness SLO</h4>
+        <div class="sre-big">${fresh.breach ? '<span class="r-neg">STALE</span>' : fresh.ran_today ? '<span class="r-pos">FRESH</span>' : 'PENDING'}</div>
+        <div class="tile"><span>Last collection run</span><b>${esc(fresh.last_run || 'never')}</b></div>
+        <div class="tile"><span>Scheduled</span><b>${esc(fresh.scheduled || '—')} +${fresh.grace_hours}h grace</b></div>
       </div>
 
       <div class="sre-card">
-        <h4>Errors by hour (today)</h4>
-        <div class="heat">${hourly.map((v) => _sreHeatCell(v, 1.6)).join('')}</div>
-        <div class="heat-legend">00h ${_sreHeatCell(0.1, 1.6)} low
-          ${_sreHeatCell(1.4, 1.6)} high · 23h</div>
+        <h4>AI budget burn (today)</h4>
+        ${budgetHtml}${tokenHtml}
+        <p class="muted" style="font-size:11px">At 100% the chat degrades to rule fallbacks — the 80% alert fires first.</p>
+      </div>
+    </div>
+
+    <div class="sre-grid" style="margin-top:12px">
+      <div class="sre-card">
+        <h4>Traffic by hour (24h, UTC · live)</h4>
+        <div class="heat">${(req.hourly_requests || []).map((v) => _sreHeatCell(v, maxHourly)).join('')}</div>
+        <div class="heat-legend">00h ${_sreHeatCell(0.05 * maxHourly, maxHourly)} low
+          ${_sreHeatCell(0.9 * maxHourly, maxHourly)} high · 23h</div>
+      </div>
+
+      <div class="sre-card">
+        <h4>Chat answer sources (7d) ${fbRate != null ? `· fallback rate <b class="${fbRate > 0.2 ? 'r-neg' : 'r-pos'}">${Math.round(fbRate * 100)}%</b>` : ''}</h4>
+        ${srcTotal ? `${srcRow('🤖 LLM (reasoned)', bySrc.llm || 0, '')}
+          ${srcRow('⚡ Rule fallback', bySrc.rule || 0, 'warn')}
+          ${srcRow('ℹ Overview fallback', bySrc.overview || 0, 'warn')}
+          ${srcRow('📊 Fund data', bySrc['fund-data'] || 0, '')}`
+          : '<p class="empty">No chat answers recorded yet — ask the AI something.</p>'}
+      </div>
+
+      <div class="sre-card">
+        <h4>Slowest endpoints (p95, 24h)</h4>
+        <table class="sre-inc-table"><thead><tr><th>Endpoint</th><th>Calls</th><th>p95</th></tr></thead>
+        <tbody>${slowRows}</tbody></table>
       </div>
     </div>
 
     <div class="sre-grid" style="margin-top:12px">
       <div class="sre-card" style="grid-column: 1 / -1">
-        <h4>Incidents · ${active.length} active</h4>
-        <table class="sre-inc-table"><thead>
-          <tr><th>ID</th><th>Sev</th><th>Title</th><th>State</th><th>Owner</th><th>Opened</th><th>SLA</th></tr>
-        </thead><tbody>
-          ${incidents.map((i) => `<tr>
-            <td>${i.id}</td>
-            <td><span class="sev ${i.sev}">${i.sev.toUpperCase()}</span></td>
-            <td>${i.title}</td><td>${i.state}</td><td>${i.owner}</td>
-            <td>${i.opened}</td><td>${i.sla}</td></tr>`).join('')}
-        </tbody></table>
+        <h4>Alerts (checked every 15 min)</h4>
+        <div class="mini-log">${alertRows}</div>
       </div>
-    </div>`;
+    </div>
+    <div id="aiUsage" style="margin-top:12px"><div class="loading">Loading AI usage…</div></div>`;
+
+  _loadAIUsage();
+}
+
+async function _loadAIUsage() {
+  // REAL data (unlike the demo panels above): every LLM call is recorded
+  // with provider, model, tokens, latency, and outcome.
+  const box = document.getElementById('aiUsage');
+  if (!box) return;
+  try {
+    const d = await getJSON('/api/admin/ai-stats');
+    const rate = d.success_rate != null ? Math.round(d.success_rate * 100) + '%' : '—';
+    const modelRows = (d.by_model || []).map((m) => `
+      <tr><td>${esc(m.provider)}</td><td>${esc(m.model || '—')}</td>
+        <td>${m.calls}</td>
+        <td>${m.calls ? Math.round((m.ok_calls / m.calls) * 100) + '%' : '—'}</td>
+        <td>${m.avg_latency_ms != null ? Math.round(m.avg_latency_ms) + 'ms' : '—'}</td>
+        <td>${(m.tokens || 0).toLocaleString()}</td></tr>`).join('')
+      || '<tr><td colspan="6" class="empty">No LLM calls recorded yet — ask the AI something.</td></tr>';
+    const errs = (d.recent_errors || []).map((e) => `
+      <div class="row"><span class="ts">${e.ts.slice(5, 16).replace('T', ' ')}</span>
+        <b>${esc(e.provider)}</b> ${esc(e.model || '')}: ${esc(e.error || '')}</div>`).join('')
+      || '<p class="empty">No recent failures.</p>';
+    box.innerHTML = `
+      <div class="sre-grid">
+        <div class="sre-card"><h4>AI calls (7d · today)</h4>
+          <div class="sre-big">${d.calls} <span class="mini">· ${d.calls_today} today</span></div>
+          <div class="tile"><span>Success rate</span><b>${rate}</b></div>
+          <div class="tile"><span>Provider</span><b>${esc(d.provider_configured)}</b></div>
+        </div>
+        <div class="sre-card"><h4>Tokens (7d · today)</h4>
+          <div class="sre-big">${((d.prompt_tokens || 0) + (d.completion_tokens || 0)).toLocaleString()}</div>
+          <div class="tile"><span>Prompt / completion</span>
+            <b>${(d.prompt_tokens || 0).toLocaleString()} / ${(d.completion_tokens || 0).toLocaleString()}</b></div>
+          <div class="tile"><span>Today</span><b>${(d.tokens_today || 0).toLocaleString()}</b></div>
+        </div>
+        <div class="sre-card"><h4>AI response time</h4>
+          <div class="sre-big">${d.avg_latency_ms != null ? Math.round(d.avg_latency_ms) + '<span class="mini"> ms avg</span>' : '—'}</div>
+          ${d.latency_series && d.latency_series.length > 1 ? _sreLineChart(d.latency_series) : ''}
+          <div class="tile"><span>Slowest (7d)</span><b>${d.max_latency_ms != null ? Math.round(d.max_latency_ms) + 'ms' : '—'}</b></div>
+        </div>
+      </div>
+      <div class="sre-grid" style="margin-top:12px">
+        <div class="sre-card"><h4>By model (7d)</h4>
+          <table class="sre-inc-table"><thead>
+            <tr><th>Provider</th><th>Model</th><th>Calls</th><th>OK</th><th>Avg</th><th>Tokens</th></tr>
+          </thead><tbody>${modelRows}</tbody></table>
+        </div>
+        <div class="sre-card"><h4>Recent AI failures</h4>
+          <div class="mini-log">${errs}</div>
+          ${d.last_error ? `<p class="muted" style="font-size:11px">last_error: ${esc(d.last_error)}</p>` : ''}
+        </div>
+      </div>`;
+  } catch (e) {
+    box.innerHTML = `<div class="empty">Could not load AI usage: ${esc(e.message)}</div>`;
+  }
 }
 VIEWS.sre = loadSRE;
 
 // ── Global search (topbar) ───────────────────────────────────────────────────
+// Visible "memory" of searched items — a per-browser recently-searched list
+// on top of the server-side detail/overview caches (the invisible speed
+// win). Clicking a recent item re-opens a symbol that's very likely still
+// warm in those server caches, so it feels instant.
+const _RECENT_KEY = 'alpha_recent_searches';
+function _getRecentSearches() {
+  try { return JSON.parse(localStorage.getItem(_RECENT_KEY) || '[]'); }
+  catch (e) { return []; }
+}
+function _rememberSearch(sym, name) {
+  if (!sym) return;
+  const list = _getRecentSearches().filter((r) => r.symbol !== sym);
+  list.unshift({ symbol: sym, name: name || '' });
+  try { localStorage.setItem(_RECENT_KEY, JSON.stringify(list.slice(0, 8))); } catch (e) {}
+}
+
 (function initGlobalSearch() {
   const inp = document.getElementById('globalSearch');
   const drop = document.getElementById('globalSearchDrop');
@@ -1365,26 +1562,42 @@ VIEWS.sre = loadSRE;
 
   function close() { drop.innerHTML = ''; drop.classList.remove('open'); }
 
+  function renderHits(hits, label) {
+    if (!hits.length) { close(); return; }
+    const heading = label ? `<div class="search-drop-label">${esc(label)}</div>` : '';
+    drop.innerHTML = heading + hits.map((r) => `
+      <button class="search-hit" data-sym="${esc(r.symbol)}" data-name="${esc(r.name || '')}">
+        <span class="sym">${esc(r.symbol)}</span>
+        <span class="nm">${esc(r.name || '')}</span></button>`).join('');
+    drop.classList.add('open');
+    drop.querySelectorAll('.search-hit').forEach((b) =>
+      b.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        _rememberSearch(b.dataset.sym, b.dataset.name);
+        close(); inp.value = '';
+        openSymbol(b.dataset.sym);
+      }));
+  }
+
+  inp.addEventListener('focus', () => {
+    if (!inp.value.trim()) {
+      const recent = _getRecentSearches();
+      if (recent.length) renderHits(recent, 'Recently searched');
+    }
+  });
+
   inp.addEventListener('input', () => {
     clearTimeout(timer);
     const q = inp.value.trim();
-    if (q.length < 2) { close(); return; }
+    if (q.length < 2) {
+      const recent = _getRecentSearches();
+      if (recent.length) renderHits(recent, 'Recently searched'); else close();
+      return;
+    }
     timer = setTimeout(async () => {
       try {
         const data = await getJSON(`/api/search?q=${encodeURIComponent(q)}&market=${currentMarket()}`);
-        const hits = (data.results || []).slice(0, 8);
-        if (!hits.length) { close(); return; }
-        drop.innerHTML = hits.map((r) => `
-          <button class="search-hit" data-sym="${esc(r.symbol)}">
-            <span class="sym">${esc(r.symbol)}</span>
-            <span class="nm">${esc(r.name || '')}</span></button>`).join('');
-        drop.classList.add('open');
-        drop.querySelectorAll('.search-hit').forEach((b) =>
-          b.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            close(); inp.value = '';
-            openSymbol(b.dataset.sym);
-          }));
+        renderHits((data.results || []).slice(0, 8), null);
       } catch (e) { close(); }
     }, 250);
   });
@@ -1394,7 +1607,10 @@ VIEWS.sre = loadSRE;
     if (e.key === 'Enter') {
       e.preventDefault();
       const first = drop.querySelector('.search-hit');
-      if (first) { close(); inp.value = ''; openSymbol(first.dataset.sym); }
+      if (first) {
+        _rememberSearch(first.dataset.sym, first.dataset.name);
+        close(); inp.value = ''; openSymbol(first.dataset.sym);
+      }
     }
   });
 })();

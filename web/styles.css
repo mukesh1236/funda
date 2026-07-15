@@ -138,6 +138,10 @@ h4, h5 { margin: 0 0 8px; }
 .search-hit:hover { background: var(--bg-glass-2); }
 .search-hit .sym { font-weight: 700; color: var(--accent); min-width: 52px; }
 .search-hit .nm  { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-drop-label {
+  padding: 7px 12px 4px; font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.07em; color: var(--muted); font-weight: 700;
+}
 
 .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .actions select {
@@ -589,6 +593,22 @@ td .caret { margin-right: 6px; }
   background: var(--accent); color: #fff; border: none;
   padding: 10px 15px; border-radius: 10px; font-weight: 700; font-size: 13px;
 }
+
+/* ── Generic stock overview (untracked tickers) ────────────────────────── */
+.stock-overview {
+  background: var(--bg-glass); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 18px; backdrop-filter: blur(10px);
+}
+.ov-back { margin-bottom: 12px; }
+.ov-head { display: flex; align-items: center; gap: 12px; }
+.ov-head .tick-avatar { width: 40px; height: 40px; font-size: 13px; }
+.ov-name { font-size: 19px; font-weight: 800; }
+.ov-price { margin-left: auto; font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.ov-rets { display: flex; gap: 14px; flex-wrap: wrap; margin: 12px 0; }
+.ov-ret { font-size: 13px; }
+.ov-ret .muted { margin-right: 4px; font-size: 11px; }
+.ovsec { margin-top: 14px; }
+.ovsec h4 { font-size: 13px; color: var(--text-2); }
 
 /* ── Misc / legacy hooks ───────────────────────────────────────────────── */
 .feed-meta { display: none; }             /* timestamp moved into the sidenav foot */
