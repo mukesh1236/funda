@@ -313,6 +313,16 @@ def admin_stats(_: dict = Depends(require_admin)):
     return store.admin_stats()
 
 
+@app.get("/api/admin/ai-stats")
+def admin_ai_stats(days: int = Query(7, ge=1, le=90), _: dict = Depends(require_admin)):
+    """AI observability — calls, tokens, latency, success rate, per-model
+    breakdown, and recent failures. Admin only."""
+    stats = store.llm_stats(days=days)
+    stats["provider_configured"] = settings.summary_provider
+    stats["last_error"] = llm_mod.last_gemini_error
+    return stats
+
+
 @app.get("/api/themes", response_model=ThemesResult)
 def themes(market: str = Query("us", pattern="^(us|in)$")):
     """Available thematic segments for a market: US (AI, Semiconductors, ...)

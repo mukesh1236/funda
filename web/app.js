@@ -1436,7 +1436,64 @@ async function loadSRE() {
             <td>${i.opened}</td><td>${i.sla}</td></tr>`).join('')}
         </tbody></table>
       </div>
-    </div>`;
+    </div>
+    <div id="aiUsage" style="margin-top:12px"><div class="loading">Loading AI usage…</div></div>`;
+
+  _loadAIUsage();
+}
+
+async function _loadAIUsage() {
+  // REAL data (unlike the demo panels above): every LLM call is recorded
+  // with provider, model, tokens, latency, and outcome.
+  const box = document.getElementById('aiUsage');
+  if (!box) return;
+  try {
+    const d = await getJSON('/api/admin/ai-stats');
+    const rate = d.success_rate != null ? Math.round(d.success_rate * 100) + '%' : '—';
+    const modelRows = (d.by_model || []).map((m) => `
+      <tr><td>${esc(m.provider)}</td><td>${esc(m.model || '—')}</td>
+        <td>${m.calls}</td>
+        <td>${m.calls ? Math.round((m.ok_calls / m.calls) * 100) + '%' : '—'}</td>
+        <td>${m.avg_latency_ms != null ? Math.round(m.avg_latency_ms) + 'ms' : '—'}</td>
+        <td>${(m.tokens || 0).toLocaleString()}</td></tr>`).join('')
+      || '<tr><td colspan="6" class="empty">No LLM calls recorded yet — ask the AI something.</td></tr>';
+    const errs = (d.recent_errors || []).map((e) => `
+      <div class="row"><span class="ts">${e.ts.slice(5, 16).replace('T', ' ')}</span>
+        <b>${esc(e.provider)}</b> ${esc(e.model || '')}: ${esc(e.error || '')}</div>`).join('')
+      || '<p class="empty">No recent failures.</p>';
+    box.innerHTML = `
+      <div class="sre-grid">
+        <div class="sre-card"><h4>AI calls (7d · today)</h4>
+          <div class="sre-big">${d.calls} <span class="mini">· ${d.calls_today} today</span></div>
+          <div class="tile"><span>Success rate</span><b>${rate}</b></div>
+          <div class="tile"><span>Provider</span><b>${esc(d.provider_configured)}</b></div>
+        </div>
+        <div class="sre-card"><h4>Tokens (7d · today)</h4>
+          <div class="sre-big">${((d.prompt_tokens || 0) + (d.completion_tokens || 0)).toLocaleString()}</div>
+          <div class="tile"><span>Prompt / completion</span>
+            <b>${(d.prompt_tokens || 0).toLocaleString()} / ${(d.completion_tokens || 0).toLocaleString()}</b></div>
+          <div class="tile"><span>Today</span><b>${(d.tokens_today || 0).toLocaleString()}</b></div>
+        </div>
+        <div class="sre-card"><h4>AI response time</h4>
+          <div class="sre-big">${d.avg_latency_ms != null ? Math.round(d.avg_latency_ms) + '<span class="mini"> ms avg</span>' : '—'}</div>
+          ${d.latency_series && d.latency_series.length > 1 ? _sreLineChart(d.latency_series) : ''}
+          <div class="tile"><span>Slowest (7d)</span><b>${d.max_latency_ms != null ? Math.round(d.max_latency_ms) + 'ms' : '—'}</b></div>
+        </div>
+      </div>
+      <div class="sre-grid" style="margin-top:12px">
+        <div class="sre-card"><h4>By model (7d)</h4>
+          <table class="sre-inc-table"><thead>
+            <tr><th>Provider</th><th>Model</th><th>Calls</th><th>OK</th><th>Avg</th><th>Tokens</th></tr>
+          </thead><tbody>${modelRows}</tbody></table>
+        </div>
+        <div class="sre-card"><h4>Recent AI failures</h4>
+          <div class="mini-log">${errs}</div>
+          ${d.last_error ? `<p class="muted" style="font-size:11px">last_error: ${esc(d.last_error)}</p>` : ''}
+        </div>
+      </div>`;
+  } catch (e) {
+    box.innerHTML = `<div class="empty">Could not load AI usage: ${esc(e.message)}</div>`;
+  }
 }
 VIEWS.sre = loadSRE;
 
