@@ -538,6 +538,9 @@ def refresh(background_tasks: BackgroundTasks):
 
 app.include_router(funds_router)
 
+from app.whatsapp import router as whatsapp_router
+app.include_router(whatsapp_router)
+
 # ── Static dashboard ──────────────────────────────────────────────────────────
 # Mounted last so /api routes take precedence. Serves web/index.html at "/".
 _WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
