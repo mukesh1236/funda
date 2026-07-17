@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     notifier: str = "console"
     whatsapp_to: str = ""  # destination number when whatsapp is wired up
 
+    # WhatsApp assistant (Phase 1 — Twilio sandbox). Get these from the Twilio
+    # console; TWILIO_WHATSAPP_FROM is like "whatsapp:+14155238886" (sandbox).
+    # whatsapp_sandbox_join is the sandbox opt-in phrase shown to users.
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_whatsapp_from: str = ""
+    whatsapp_sandbox_join: str = ""   # e.g. "join <two-words>"
+
     # Scheduler
     enable_scheduler: bool = True
     daily_job_hour: int = 8

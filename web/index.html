@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=26" />
+  <link rel="stylesheet" href="/styles.css?v=27" />
 </head>
 <body>
 <div class="app-shell">
@@ -84,6 +84,7 @@
         <button id="signIn" class="ghost-btn" hidden>Sign in</button>
         <div class="user-menu" id="userMenu" hidden>
           <span class="user-name" id="userName"></span>
+          <button id="waConnect" class="ghost-btn" title="Get answers on WhatsApp">📱 WhatsApp</button>
           <button id="logout" class="ghost-btn" title="Log out">Log out</button>
         </div>
       </div>
@@ -144,6 +145,17 @@
   </div>
 </div>
 
+<!-- Connect WhatsApp dialog -->
+<div class="wa-overlay" id="waOverlay" hidden>
+  <div class="wa-card">
+    <button class="wa-close" id="waClose" aria-label="Close">✕</button>
+    <div class="wa-title">📱 Get AlphaFunds on WhatsApp</div>
+    <p class="wa-sub">Link once, then ask anything from your phone — "top buys today", "how's NVDA?", "which analysts are most accurate?" — no need to open the site.</p>
+    <div id="waBody"><div class="loading">Generating your link code…</div></div>
+    <p class="wa-legal">Analysis, not investment advice. Reply STOP on WhatsApp anytime to unsubscribe.</p>
+  </div>
+</div>
+
 <!-- Ask-AI floating assistant -->
 <button id="chatFab" class="chat-fab" title="Ask AI about these stocks"><span class="fab-ic">✦</span> Ask AI</button>
 <div id="chatPanel" class="chat-panel" hidden>
@@ -165,6 +177,6 @@
   </form>
 </div>
 
-<script src="/app.js?v=26"></script>
+<script src="/app.js?v=27"></script>
 </body>
 </html>

@@ -922,6 +922,44 @@ $('#logout').addEventListener('click', async () => {
   if (view === 'watchlist') render();   // swap to the sign-in gate
 });
 
+// ── Connect WhatsApp ──────────────────────────────────────────────────────────
+(function initWhatsApp() {
+  const btn = document.getElementById('waConnect');
+  const overlay = document.getElementById('waOverlay');
+  const closeBtn = document.getElementById('waClose');
+  if (!btn || !overlay) return;
+
+  const close = () => { overlay.hidden = true; };
+  closeBtn.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  btn.addEventListener('click', async () => {
+    overlay.hidden = false;
+    const body = document.getElementById('waBody');
+    body.innerHTML = '<div class="loading">Generating your link code…</div>';
+    try {
+      const d = await postJSON('/api/whatsapp/link-code');
+      const steps = [];
+      if (d.whatsapp_number) {
+        if (d.sandbox_join) {
+          steps.push(`First-time join: send <b>${esc(d.sandbox_join)}</b> to <b>${esc(d.whatsapp_number)}</b> on WhatsApp.`);
+        }
+        steps.push(`Then send this 6-digit code to <b>${esc(d.whatsapp_number)}</b>:`);
+      } else {
+        steps.push('Send this 6-digit code to our WhatsApp number:');
+      }
+      body.innerHTML = `
+        ${d.already_linked ? '<p class="wa-linked">✅ This account is already connected. Generating a new code re-links a different phone.</p>' : ''}
+        <ol class="wa-steps">${steps.map(s => `<li>${s}</li>`).join('')}</ol>
+        <div class="wa-code">${esc(d.code)}</div>
+        <p class="wa-expiry">Expires in ${d.expires_minutes} minutes.</p>
+        ${d.wa_link ? `<a class="wa-open" href="${esc(d.wa_link)}" target="_blank" rel="noopener">Open WhatsApp with this code pre-filled →</a>` : ''}`;
+    } catch (e) {
+      body.innerHTML = `<div class="empty">Couldn't generate a code: ${esc(e.message)}</div>`;
+    }
+  });
+})();
+
 function onLoggedIn(user) {
   _currentUser = user;
   hideAuth();

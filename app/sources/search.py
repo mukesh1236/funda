@@ -65,20 +65,34 @@ _INDIA_STATIC: List[tuple] = [
 ]
 
 
-def _yahoo_quotes(query: str, count: int = 12) -> List[dict]:
+def _yahoo_quotes(query: str, count: int = 12, fuzzy: bool = False) -> List[dict]:
     """Raw Yahoo Finance search quotes list."""
     try:
         with httpx.Client(timeout=8, headers=_HEADERS) as client:
-            resp = client.get(_URL, params={
-                "q": query, "quotesCount": count, "newsCount": 0,
-                "enableFuzzyQuery": "false",
-                "quotesQueryId": "tss_match_phrase_query",
-            })
+            params = {"q": query, "quotesCount": count, "newsCount": 0}
+            if fuzzy:
+                params["enableFuzzyQuery"] = "true"
+            else:
+                params["enableFuzzyQuery"] = "false"
+                params["quotesQueryId"] = "tss_match_phrase_query"
+            resp = client.get(_URL, params=params)
             resp.raise_for_status()
             return resp.json().get("quotes") or []
     except Exception as e:
-        logger.info("Yahoo search failed for %r: %s", query, e)
+        logger.info("Yahoo search failed for %r (fuzzy=%s): %s", query, fuzzy, e)
         return []
+
+
+def _yahoo_quotes_with_fallback(query: str, count: int = 12) -> List[dict]:
+    """Strict phrase-match first (Yahoo's default, precise for exact names);
+    if that finds nothing, retry with fuzzy matching enabled. Plain
+    phrase-match can miss real companies over small wording differences —
+    e.g. "coca cola" vs Yahoo's canonical "The Coca-Cola Company" — that a
+    fuzzy/typo-tolerant search resolves fine."""
+    quotes = _yahoo_quotes(query, count, fuzzy=False)
+    if quotes:
+        return quotes
+    return _yahoo_quotes(query, count, fuzzy=True)
 
 
 def _parse_quotes(quotes: List[dict], market: str, limit: int) -> List[dict]:
@@ -136,16 +150,21 @@ def search_tickers(query: str, market: str = "us", limit: int = 6) -> List[dict]
         results = _static_india_matches(q.lower(), limit)
 
     if len(results) < limit:
-        # Fill remaining slots from Yahoo search.
-        quotes = _yahoo_quotes(q)
+        # Fill remaining slots from Yahoo search (strict phrase-match, then
+        # fuzzy fallback — see _yahoo_quotes_with_fallback).
+        quotes = _yahoo_quotes_with_fallback(q)
         yahoo = _parse_quotes(quotes, market, limit - len(results))
         seen = {r["symbol"] for r in results}
         results += [r for r in yahoo if r["symbol"] not in seen]
 
     # India final fallback: retry Yahoo with " NSE" for short queries.
     if market == "in" and not results and len(q) <= 20:
-        quotes2 = _yahoo_quotes(q + " NSE")
+        quotes2 = _yahoo_quotes_with_fallback(q + " NSE")
         results = _parse_quotes(quotes2, market, limit)
 
-    _CACHE[cache_key] = results
+    # Only cache HITS. Caching an empty result for the full hour would
+    # memorize a transient failure (timeout, rate limit) or an over-strict
+    # match as "this company doesn't exist" for everyone, for an hour.
+    if results:
+        _CACHE[cache_key] = results
     return results

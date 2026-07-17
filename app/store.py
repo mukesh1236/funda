@@ -120,6 +120,27 @@ CREATE TABLE IF NOT EXISTS chat_answers (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_answers_ts ON chat_answers(ts);
 
+-- WhatsApp assistant: a verified phone <-> user binding (Phase 1). Phone is
+-- code-proven (only the logged-in owner ever sees the 6-digit code), never
+-- self-claimed. opted_in gates all outbound; STOP flips it off.
+CREATE TABLE IF NOT EXISTS whatsapp_links (
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    phone_e164  TEXT PRIMARY KEY,        -- one phone maps to one account
+    opted_in    INTEGER NOT NULL DEFAULT 1,
+    verified_at TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wa_links_user ON whatsapp_links(user_id);
+
+-- Pending 6-digit linking codes (short TTL, single-use) — mirrors the
+-- password-reset-token pattern.
+CREATE TABLE IF NOT EXISTS whatsapp_link_codes (
+    code       TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TEXT NOT NULL,
+    used       INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS metrics_daily (
     day      TEXT PRIMARY KEY,   -- "YYYY-MM-DD"
     hits     INTEGER NOT NULL DEFAULT 0,   -- app page loads that day
@@ -456,6 +477,76 @@ class RecommendationStore:
                 return None
             conn.execute("UPDATE password_reset_tokens SET used = 1 WHERE token = ?", (token,))
             return int(row["user_id"])
+
+    # ── WhatsApp linking (Phase 1) ────────────────────────────────────────────
+    def create_whatsapp_link_code(self, user_id: int, ttl_minutes: int = 10) -> str:
+        """Generate a numeric 6-digit code bound to a user (single-use, short
+        TTL). Old codes for the same user are purged first."""
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
+        ).isoformat()
+        with _write_lock, self._connect() as conn:
+            conn.execute("DELETE FROM whatsapp_link_codes WHERE user_id = ?", (user_id,))
+            conn.execute(
+                "INSERT INTO whatsapp_link_codes (code, user_id, expires_at, used) "
+                "VALUES (?, ?, ?, 0)",
+                (code, user_id, expires_at),
+            )
+        return code
+
+    def consume_whatsapp_link_code(self, code: str) -> Optional[int]:
+        """Validate + mark a link code used. Returns user_id or None."""
+        now = datetime.now(timezone.utc).isoformat()
+        with _write_lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT user_id, expires_at, used FROM whatsapp_link_codes WHERE code = ?",
+                (code,),
+            ).fetchone()
+            if not row or row["used"] or row["expires_at"] < now:
+                return None
+            conn.execute("UPDATE whatsapp_link_codes SET used = 1 WHERE code = ?", (code,))
+            return int(row["user_id"])
+
+    def bind_whatsapp(self, user_id: int, phone_e164: str) -> None:
+        """Bind (or re-bind) a verified phone to a user; re-opts-in."""
+        now = datetime.now(timezone.utc).isoformat()
+        with _write_lock, self._connect() as conn:
+            conn.execute(
+                """INSERT INTO whatsapp_links (user_id, phone_e164, opted_in, verified_at, created_at)
+                   VALUES (?, ?, 1, ?, ?)
+                   ON CONFLICT(phone_e164) DO UPDATE SET
+                     user_id = excluded.user_id, opted_in = 1, verified_at = excluded.verified_at""",
+                (user_id, phone_e164, now, now),
+            )
+
+    def get_user_by_whatsapp(self, phone_e164: str) -> Optional[dict]:
+        """The opted-in user linked to a phone, or None."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT u.* FROM users u JOIN whatsapp_links w ON w.user_id = u.id "
+                "WHERE w.phone_e164 = ? AND w.opted_in = 1",
+                (phone_e164,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def whatsapp_opt_out(self, phone_e164: str) -> bool:
+        """STOP handling — flip opted_in off. True if a row was affected."""
+        with _write_lock, self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE whatsapp_links SET opted_in = 0 WHERE phone_e164 = ?",
+                (phone_e164,),
+            )
+            return cur.rowcount > 0
+
+    def whatsapp_link_for_user(self, user_id: int) -> Optional[dict]:
+        """Existing binding for a user (for the website 'connected?' state)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT phone_e164, opted_in, verified_at FROM whatsapp_links WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        return dict(row) if row else None
 
     # ── traffic metrics + admin stats ────────────────────────────────────────────
     def bump_metric(self, day: str, new_visitor: bool) -> None:
