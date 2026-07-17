@@ -1,6 +1,7 @@
-"""WhatsApp assistant (Phase 1) tests — store linking, inbound routing,
-Twilio signature verification, and opt-out. All provider I/O is avoided
-(webhook replies via TwiML; no outbound calls made)."""
+"""WhatsApp assistant tests — Phase 1 (store linking, inbound routing,
+Twilio signature verification, opt-out) and Phase 2 (personalized morning
+brief). All provider I/O is avoided (webhook replies via TwiML / mocked
+sends; no outbound network calls made)."""
 import base64
 import hashlib
 import hmac
@@ -8,6 +9,8 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from app import jobs
+from app.models import ConsensusOut
 from app.store import RecommendationStore
 from app.whatsapp import linking
 
@@ -47,6 +50,19 @@ def test_opt_out_hides_user(tmp_path):
     assert s.get_user_by_whatsapp("+14155550002") is None   # opted out → invisible
 
 
+def test_list_whatsapp_opted_in_excludes_opted_out(tmp_path):
+    s = _store(tmp_path)
+    u1 = s.create_user("d1@t.com", "h", "D1")
+    u2 = s.create_user("d2@t.com", "h", "D2")
+    s.bind_whatsapp(u1, "+14155550003")
+    s.bind_whatsapp(u2, "+14155550004")
+    s.whatsapp_opt_out("+14155550004")
+
+    links = s.list_whatsapp_opted_in()
+    assert {l["user_id"] for l in links} == {u1}
+    assert {l["phone_e164"] for l in links} == {"+14155550003"}
+
+
 def test_extract_code_is_strict():
     assert linking.extract_code("123456") == "123456"
     assert linking.extract_code("  123456 ") == "123456"
@@ -70,8 +86,12 @@ def test_webhook_unlinked_phone_gets_link_instructions():
 
 
 def test_webhook_full_link_then_ask_then_stop():
+    import uuid
     c = _client()
-    c.post("/api/auth/register", json={"email": "flow2@t.com", "password": "longpass123"})
+    email = f"flow2-{uuid.uuid4().hex[:8]}@t.com"   # unique per run: this hits the
+    # real dev DB (webhook.py owns its own store instance), so a fixed email
+    # would 409 as "already registered" on a second run of the suite.
+    c.post("/api/auth/register", json={"email": email, "password": "longpass123"})
     code = c.post("/api/whatsapp/link-code").json()["code"]
     phone = "whatsapp:+14155550101"
 
@@ -121,3 +141,71 @@ def test_valid_twilio_signature_accepted(tmp_path, monkeypatch):
     c = _client()
     r = c.post("/api/whatsapp/webhook", data=params, headers={"X-Twilio-Signature": sig})
     assert r.status_code == 200   # signature verified → routed normally
+
+
+# ── Phase 2: personalized morning brief ────────────────────────────────────────
+def _consensus(symbol: str, score: int) -> ConsensusOut:
+    return ConsensusOut(
+        symbol=symbol, buy_count=max(score, 0), hold_count=1,
+        sell_count=max(-score, 0), total_count=abs(score) + 1,
+        consensus_score=score,
+    )
+
+
+def test_format_brief_uses_watchlist_when_present():
+    by_symbol = {"NVDA": _consensus("NVDA", 5), "AAPL": _consensus("AAPL", 2)}
+    body = jobs._format_brief(["NVDA"], ["SPY"], by_symbol, fallback_top=[])
+    assert "NVDA" in body and "consensus +5" in body
+    assert "SPY" in body
+    assert "Today's top picks" not in body
+
+
+def test_format_brief_falls_back_to_top_picks_when_nothing_pinned():
+    fallback = [_consensus("MSFT", 4), _consensus("TSLA", 1)]
+    body = jobs._format_brief([], [], {}, fallback_top=fallback)
+    assert "Today's top picks" in body
+    assert "MSFT" in body
+
+
+def test_send_whatsapp_briefs_skips_when_not_configured(tmp_path, monkeypatch):
+    s = _store(tmp_path)
+    from app.config import get_settings
+    settings = get_settings()
+    monkeypatch.setattr(settings, "twilio_account_sid", "")
+    sent = jobs.send_whatsapp_briefs(s, settings)
+    assert sent == 0
+
+
+def test_send_whatsapp_briefs_sends_personalized_message_per_user(tmp_path, monkeypatch):
+    s = _store(tmp_path)
+    uid = s.create_user("brief@t.com", "h", "Bri")
+    s.bind_whatsapp(uid, "+14155550200")
+    s.add_watchlist(uid, "NVDA", "default", "2026-01-01", 100.0, "Nvidia")
+
+    from app.config import get_settings
+    settings = get_settings()
+    monkeypatch.setattr(settings, "twilio_account_sid", "sid")
+    monkeypatch.setattr(settings, "twilio_auth_token", "tok")
+    monkeypatch.setattr(settings, "twilio_whatsapp_from", "whatsapp:+14155238886")
+
+    class _FakeFeed:
+        def __init__(self, stocks):
+            self.stocks = stocks
+
+    def _fake_build_feed(store, days=1, market="us"):
+        return _FakeFeed([_consensus("NVDA", 5)] if market == "us" else [])
+
+    monkeypatch.setattr(jobs, "build_feed", _fake_build_feed)
+
+    sent_messages = []
+    monkeypatch.setattr(
+        jobs.WhatsAppClient, "send_text",
+        lambda self, to_phone, body: sent_messages.append((to_phone, body)) or True,
+    )
+
+    sent = jobs.send_whatsapp_briefs(s, settings)
+    assert sent == 1
+    assert len(sent_messages) == 1
+    to_phone, body = sent_messages[0]
+    assert to_phone == "+14155550200"
+    assert "NVDA" in body

@@ -548,6 +548,15 @@ class RecommendationStore:
             ).fetchone()
         return dict(row) if row else None
 
+    def list_whatsapp_opted_in(self) -> List[dict]:
+        """[{user_id, phone_e164}] for every opted-in link — used by the
+        Phase 2 morning-brief job to know who to message."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT user_id, phone_e164 FROM whatsapp_links WHERE opted_in = 1"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     # ── traffic metrics + admin stats ────────────────────────────────────────────
     def bump_metric(self, day: str, new_visitor: bool) -> None:
         """Record one app page-load for `day`; flag new_visitor for unique counts."""
