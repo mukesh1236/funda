@@ -22,6 +22,7 @@ from app.sources.profiles import fetch_ownership, fetch_profile, ownership_summa
 from app.sources.tipranks import TipRanksClient
 from app.sources.yahoo import YahooClient, YahooUpgradesClient
 from app.store import RecommendationStore
+from app.whatsapp.client import WhatsAppClient
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +176,74 @@ def refresh_profiles(store: RecommendationStore, settings: Settings) -> int:
     return updated
 
 
+def _format_brief(user_symbols: list, fund_symbols: list, by_symbol: dict,
+                   fallback_top: list) -> str:
+    """Personalized text for one user: their watchlist/fund picks if any,
+    else the day's top global consensus calls."""
+    lines = [f"☀️ Morning Brief — {date.today().isoformat()}"]
+
+    watched = [by_symbol[s] for s in user_symbols if s in by_symbol]
+    if watched:
+        lines.append("\nYour watchlist:")
+        for c in watched:
+            change = f" ({c.day_change_pct:+.1f}% today)" if c.day_change_pct is not None else ""
+            lines.append(
+                f"• {c.symbol}: consensus {c.consensus_score:+d} "
+                f"(B{c.buy_count}/H{c.hold_count}/S{c.sell_count}){change}"
+            )
+
+    if fund_symbols:
+        lines.append("\nYour tracked funds: " + ", ".join(fund_symbols))
+
+    if not watched and not fund_symbols:
+        lines.append("\nToday's top picks:")
+        for c in fallback_top[:3]:
+            lines.append(
+                f"• {c.symbol}: consensus {c.consensus_score:+d} "
+                f"(B{c.buy_count}/H{c.hold_count}/S{c.sell_count})"
+            )
+
+    lines.append("\nAsk me anything, e.g. \"how's NVDA?\" — analysis, not investment advice.")
+    return "\n".join(lines)
+
+
+def send_whatsapp_briefs(store: RecommendationStore, settings: Settings) -> int:
+    """Phase 2: personalized 08:00 morning brief to every opted-in WhatsApp
+    user — their watchlist/fund picks, or the day's top calls if they
+    haven't pinned anything yet. Never raises; a delivery hiccup for one user
+    must not affect others or the rest of the daily job."""
+    client = WhatsAppClient(settings)
+    if not client.configured():
+        logger.info("WhatsApp briefs skipped — Twilio creds not configured.")
+        return 0
+
+    links = store.list_whatsapp_opted_in()
+    if not links:
+        return 0
+
+    by_symbol = {}
+    fallback_top: list = []
+    for market in ("us", "in"):
+        feed = build_feed(store, days=1, market=market)
+        by_symbol.update({c.symbol: c for c in feed.stocks})
+        fallback_top.extend(feed.stocks)
+    fallback_top.sort(key=lambda c: (c.consensus_score, c.total_count), reverse=True)
+
+    sent = 0
+    for link in links:
+        try:
+            watchlist = [w["symbol"] for w in store.list_watchlist(link["user_id"])]
+            funds = [f["symbol"] for f in store.list_fund_portfolio(link["user_id"])]
+            body = _format_brief(watchlist, funds, by_symbol, fallback_top)
+            if client.send_text(link["phone_e164"], body):
+                sent += 1
+        except Exception as e:
+            logger.warning("WhatsApp brief failed for user %s: %s", link["user_id"], e)
+
+    logger.info("WhatsApp briefs: sent %d/%d", sent, len(links))
+    return sent
+
+
 def run_daily(
     store: Optional[RecommendationStore] = None,
     settings: Optional[Settings] = None,
@@ -209,5 +278,10 @@ def run_daily(
         logger.warning("Notifier not wired up: %s", e)
     except Exception as e:  # delivery must not fail the whole run
         logger.error("Notifier error: %s", e)
+
+    try:
+        digest["whatsapp_briefs_sent"] = send_whatsapp_briefs(store, settings)
+    except Exception as e:  # delivery must not fail the whole run
+        logger.error("WhatsApp briefs error: %s", e)
 
     return digest
