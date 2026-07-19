@@ -75,6 +75,10 @@ def _openrouter_candidates(settings: Settings) -> List[str]:
         filtered = [m for m in candidates if m in live or not m.endswith(":free")]
         if filtered:
             return filtered
+        # None of our hardcoded fallbacks are still live (OpenRouter renamed/
+        # retired them) — better to try real current free slugs than to keep
+        # retrying ones we already know are dead.
+        return sorted(live)
     return candidates
 
 

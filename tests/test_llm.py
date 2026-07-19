@@ -1,5 +1,6 @@
 """OpenRouter robustness tests: the model fallback chain must survive a bad
 or retired model slug, and must stop immediately on an auth failure."""
+import time
 from unittest.mock import MagicMock, patch
 
 from app import llm
@@ -67,6 +68,23 @@ def test_openrouter_all_models_fail_reports_details():
     assert out is None
     assert "exhausted" in llm.last_gemini_error
     assert "m1:free" in llm.last_gemini_error
+
+
+def test_candidates_use_live_catalog_when_hardcoded_fallbacks_are_all_stale():
+    """If OpenRouter has renamed/retired every hardcoded fallback slug, the
+    live-catalog check must not give up and hand back the known-dead list
+    (that would guarantee 404s) — it should offer real current :free models
+    instead."""
+    settings = Settings(openrouter_api_key="k", openrouter_model="dead/model:free")
+    llm._openrouter_catalog["free"] = {"fresh/model-a:free", "fresh/model-b:free"}
+    llm._openrouter_catalog["ts"] = time.time()
+    try:
+        out = llm._openrouter_candidates(settings)
+    finally:
+        llm._openrouter_catalog["free"] = None
+        llm._openrouter_catalog["ts"] = 0.0
+    assert out == ["fresh/model-a:free", "fresh/model-b:free"]
+    assert "dead/model:free" not in out
 
 
 def test_openrouter_no_key_short_circuits():
