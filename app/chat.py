@@ -105,6 +105,65 @@ _COMMON_WORDS = {
 }
 
 
+# Broad/listing-shaped questions ("top picks", "strongest buys") are about the
+# whole tracked universe, not one company — skip the untracked-symbol search
+# for these so the common question shape never pays for an extra lookup.
+_BROAD_QUESTION_SIGNALS = (
+    "top", "best", "strongest", "worst", "most", "all stocks", "overall",
+    "summary", "summarize", "leaderboard", "overview", "market digest",
+    "everything", "watchlist", "which stocks",
+)
+
+_QUESTION_STOPWORDS = frozenset({
+    "what", "whats", "how", "hows", "why", "is", "are", "the", "a", "an",
+    "about", "tell", "me", "of", "for", "on", "in", "doing", "today",
+    "stock", "stocks", "share", "shares", "price", "analyst", "analysts",
+    "rating", "does", "do", "did", "and", "or", "to", "with", "you", "your",
+})
+
+
+def _detect_untracked_symbol(question: str, market: str) -> Optional[str]:
+    """When no tracked ticker/company matched, try resolving a stock the app
+    doesn't track (e.g. "how's Coca-Cola doing?") via the same search used by
+    the site's search bar — so the chat can answer with generic overview data
+    instead of just saying it isn't in the dataset."""
+    q = question.lower()
+    if any(sig in q for sig in _BROAD_QUESTION_SIGNALS):
+        return None
+    words = re.findall(r"[a-zA-Z]+", q)
+    query = " ".join(w for w in words if w not in _QUESTION_STOPWORDS)
+    if not query:
+        return None
+    from app.sources.search import search_tickers
+    hits = search_tickers(query, market=market, limit=1)
+    return hits[0]["symbol"] if hits else None
+
+
+def _fmt_overview(ov) -> str:
+    """Generic profile context for a stock outside the tracked universe —
+    same data the standalone stock-overview page shows."""
+    parts = [
+        f"UNTRACKED STOCK {ov.symbol} ({ov.company_name or ov.symbol}) — no analyst "
+        "recommendations tracked for this one, but general market data is available:"
+    ]
+    if ov.price is not None:
+        parts.append(f"Current price: ${ov.price}")
+    f = ov.fundamentals
+    if f:
+        if f.sector:
+            parts.append(f"Sector: {f.sector}" + (f" / {f.industry}" if f.industry else ""))
+        if f.market_cap:
+            parts.append(f"Market cap: ${f.market_cap:,.0f}")
+        if f.pe_ratio:
+            parts.append(f"P/E: {f.pe_ratio:g}")
+        if f.dividend_yield:
+            parts.append(f"Dividend yield: {f.dividend_yield:g}%")
+    r = ov.returns
+    if r and r.twelve_month is not None:
+        parts.append(f"12-month return: {r.twelve_month:+.1f}%")
+    return " ".join(parts)
+
+
 def _detect_symbol(question: str, stocks: list) -> Optional[str]:
     """Find a ticker the user mentioned (by symbol or company name)."""
     toks = {t.upper() for t in re.findall(r"[A-Za-z.\-]{2,}", question)}
@@ -496,6 +555,16 @@ def answer_question(
         # include stock context even when the symbol comes from question text
         detected = symbol or _detect_symbol(question, feed.stocks)
         sym_ctx = _fmt_symbol(store, detected) if detected else ""
+        if not sym_ctx and not detected:
+            # Not a tracked stock — try resolving it anyway (e.g. "Coca-Cola")
+            # so the answer uses real data instead of "not in my dataset".
+            untracked = _detect_untracked_symbol(question, market)
+            if untracked:
+                from app.service import build_stock_overview
+                ov = build_stock_overview(untracked)
+                if ov:
+                    detected = untracked
+                    sym_ctx = _fmt_overview(ov)
         web_ctx = ""
         if _needs_web_context(question):
             web_query = f"{detected} {question}" if detected else question
