@@ -1001,36 +1001,61 @@ $('#chatForm').addEventListener('submit', async (e) => {
   $('#chatScope').textContent = chatScopeLabel();
   const thinking = addChatMsg('Thinking…', 'bot pending');
   $('#chatSend').disabled = true;
+  // Hard client-side timeout: a hung request must never leave the chat
+  // stuck on "Thinking…" forever.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 90000);
+  let gotText = false;
+  let source = null;
   try {
     const body = { question: q, market: currentMarket() };
     if (_chatSymbol) body.symbol = _chatSymbol;
-    // Hard client-side timeout: a hung request must never leave the chat
-    // stuck on "Thinking…" forever.
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 90000);
-    let res;
-    try {
-      const raw = await fetch(API + '/api/chat', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body), signal: ctrl.signal,
-      });
-      if (!raw.ok) {
-        let detail = `chat → ${raw.status}`;
-        try { const j = await raw.json(); if (j.detail) detail = j.detail; } catch (e2) {}
-        throw new Error(detail);
+    const raw = await fetch(API + '/api/chat/stream', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), signal: ctrl.signal,
+    });
+    if (!raw.ok) {
+      let detail = `chat → ${raw.status}`;
+      try { const j = await raw.json(); if (j.detail) detail = j.detail; } catch (e2) {}
+      throw new Error(detail);
+    }
+    // Server-Sent Events: read+decode the response body as it arrives and
+    // append each chunk's text immediately, instead of waiting for the
+    // whole answer before showing anything.
+    const reader = raw.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let sep;
+      while ((sep = buf.indexOf('\n\n')) !== -1) {
+        const frame = buf.slice(0, sep);
+        buf = buf.slice(sep + 2);
+        const line = frame.split('\n').find((l) => l.startsWith('data:'));
+        if (!line) continue;
+        let evt;
+        try { evt = JSON.parse(line.slice(5).trim()); } catch (e2) { continue; }
+        if (evt.delta) {
+          if (!gotText) { thinking.classList.remove('pending'); thinking.textContent = ''; }
+          gotText = true;
+          thinking.textContent += evt.delta;
+          $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
+        }
+        if (evt.done) source = evt.source;
       }
-      res = await raw.json();
-    } finally { clearTimeout(timer); }
+    }
     thinking.classList.remove('pending');
-    thinking.textContent = res.answer;
+    if (!gotText) thinking.textContent = '(no answer)';
     // Make fallback answers visibly fallbacks — if the AI didn't answer,
     // the user should know they got a quick data lookup instead.
-    if (res.source && res.source !== 'llm') {
+    if (source && source !== 'llm') {
       const tag = document.createElement('div');
       tag.className = 'chat-src';
-      tag.textContent = res.source === 'rule' ? '⚡ quick data answer (AI unavailable)'
-        : res.source === 'fund-data' ? '⚡ fund data (AI unavailable)'
-        : res.source === 'out-of-scope' ? '🛈 outside AlphaFunds’ scope'
+      tag.textContent = source === 'rule' ? '⚡ quick data answer (AI unavailable)'
+        : source === 'fund-data' ? '⚡ fund data (AI unavailable)'
+        : source === 'out-of-scope' ? '🛈 outside AlphaFunds’ scope'
         : 'ℹ data overview';
       thinking.appendChild(tag);
     }
@@ -1041,6 +1066,7 @@ $('#chatForm').addEventListener('submit', async (e) => {
       ? 'The AI took too long to answer. Please try again — if this keeps happening, check /api/health → llm.last_error.'
       : (err.message || 'Could not reach the AI.');
   } finally {
+    clearTimeout(timer);
     $('#chatSend').disabled = false;
     $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
   }

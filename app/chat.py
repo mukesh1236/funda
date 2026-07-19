@@ -561,26 +561,7 @@ def answer_question(
 
     # 1) LLM with full context — the primary answer path when configured.
     if llm_on:
-        feed_ctx = _fmt_feed(feed)
-        lb = _fmt_leaderboard(store, market)
-        # include stock context even when the symbol comes from question text
-        detected = symbol or _detect_symbol(question, feed.stocks)
-        sym_ctx = _fmt_symbol(store, detected) if detected else ""
-        if not sym_ctx and not detected:
-            # Not a tracked stock — try resolving it anyway (e.g. "Coca-Cola")
-            # so the answer uses real data instead of "not in my dataset".
-            untracked = _detect_untracked_symbol(question, market)
-            if untracked:
-                from app.service import build_stock_overview
-                ov = build_stock_overview(untracked)
-                if ov:
-                    detected = untracked
-                    sym_ctx = _fmt_overview(ov)
-        web_ctx = ""
-        if _needs_web_context(question):
-            web_query = f"{detected} {question}" if detected else question
-            web_ctx = _web_context(web_query, settings)
-        prompt = _prompt(question, market, feed_ctx, lb, sym_ctx, web_ctx)
+        prompt = _build_main_prompt(store, settings, question, market, symbol, feed)
         answer = generate_narrative(prompt, settings, timeout=30)
         if answer:
             return answer, None, "llm"
@@ -600,3 +581,68 @@ def answer_question(
                      "(gemini / grok / ollama) and the matching API key to get "
                      "reasoned answers instead of quick data lookups.")
     return overview, None, "overview"
+
+
+def _build_main_prompt(store: RecommendationStore, settings: Settings, question: str,
+                       market: str, symbol: Optional[str], feed) -> str:
+    """Shared by the sync and streaming LLM paths: feed/leaderboard/symbol/web
+    context assembly for the primary open-ended question prompt."""
+    feed_ctx = _fmt_feed(feed)
+    lb = _fmt_leaderboard(store, market)
+    # include stock context even when the symbol comes from question text
+    detected = symbol or _detect_symbol(question, feed.stocks)
+    sym_ctx = _fmt_symbol(store, detected) if detected else ""
+    if not sym_ctx and not detected:
+        # Not a tracked stock — try resolving it anyway (e.g. "Coca-Cola")
+        # so the answer uses real data instead of "not in my dataset".
+        untracked = _detect_untracked_symbol(question, market)
+        if untracked:
+            from app.service import build_stock_overview
+            ov = build_stock_overview(untracked)
+            if ov:
+                detected = untracked
+                sym_ctx = _fmt_overview(ov)
+    web_ctx = ""
+    if _needs_web_context(question):
+        web_query = f"{detected} {question}" if detected else question
+        web_ctx = _web_context(web_query, settings)
+    return _prompt(question, market, feed_ctx, lb, sym_ctx, web_ctx)
+
+
+def answer_question_stream(
+    store: RecommendationStore,
+    settings: Settings,
+    question: str,
+    market: str = "us",
+    symbol: Optional[str] = None,
+):
+    """Streaming counterpart to answer_question, for the website chat only.
+    Yields dicts: {"delta": "<text chunk>"} for each piece of text, followed
+    by exactly one final {"done": True, "source": <source>}.
+
+    Only the primary open-ended LLM path streams token-by-token (via
+    OpenRouter) — the guardrail refusal, fund questions, and rule/overview
+    fallbacks are already instant/local (or need the full multi-model retry
+    chain), so they compute their complete answer via answer_question() and
+    yield it as a single chunk. This keeps one streaming protocol for the
+    frontend without duplicating the guardrail/fund/fallback logic."""
+    llm_on = settings.summary_provider in _LLM_PROVIDERS
+    if _in_scope(question) and llm_on and not _detect_fund_ticker(question):
+        feed = build_feed(store, days=30, market=market)
+        prompt = _build_main_prompt(store, settings, question, market, symbol, feed)
+
+        from app.llm import generate_narrative_stream
+        chunks: List[str] = []
+        for chunk in generate_narrative_stream(prompt, settings, timeout=30):
+            chunks.append(chunk)
+            yield {"delta": chunk}
+        if "".join(chunks).strip():
+            yield {"done": True, "source": "llm"}
+            return
+        # Streaming unavailable/empty (provider doesn't support it yet, or the
+        # call failed) — fall through to the full non-streaming pipeline below,
+        # which retries via the multi-model fallback chain.
+
+    answer, error, source = answer_question(store, settings, question, market, symbol)
+    yield {"delta": answer or ""}
+    yield {"done": True, "source": source}

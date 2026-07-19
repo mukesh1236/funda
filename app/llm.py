@@ -1,6 +1,7 @@
 """Shared best-effort LLM calls for the per-stock "why analysts recommend it"
 narrative and the daily macro digest. Supports a local Ollama model or Google
 Gemini's free API. Always degrades gracefully — None on any failure/timeout."""
+import json
 import logging
 import time
 from typing import List, Optional
@@ -113,6 +114,18 @@ def generate_narrative(prompt: str, settings: Settings, timeout: float = 20) -> 
             return gemini_generate(prompt, settings, timeout)
         return ollama_generate(prompt, settings, timeout)
     return None
+
+
+def generate_narrative_stream(prompt: str, settings: Settings, timeout: float = 30):
+    """Streaming counterpart to generate_narrative — yields text chunks as
+    they're generated. Only OpenRouter streams true token-by-token today
+    (it's the recommended/free provider); other providers yield nothing,
+    and the caller falls back to the full generate_narrative() call and
+    emits its answer as a single chunk — same end result, just not
+    progressive for those providers yet."""
+    provider = settings.summary_provider
+    if provider in ("openrouter", "auto") and settings.openrouter_api_key:
+        yield from openrouter_generate_stream(prompt, settings, timeout)
 
 
 def gemini_generate(prompt: str, settings: Settings, timeout: float = 20) -> Optional[str]:
@@ -287,6 +300,74 @@ def openrouter_generate(prompt: str, settings: Settings, timeout: float = 30) ->
 
     last_gemini_error = "OpenRouter exhausted all models — " + "; ".join(errors[:4])
     return None
+
+
+def openrouter_generate_stream(prompt: str, settings: Settings, timeout: float = 30):
+    """Yields text chunks as OpenRouter streams the CONFIGURED model
+    token-by-token. Yields nothing at all on any failure (no key, non-200,
+    network error) — the caller should fall back to openrouter_generate()'s
+    full multi-model retry chain in that case, same as if this were never
+    called. Only the single configured model is tried here; streaming
+    doesn't mix with mid-stream fallback (can't retry after already sending
+    partial output to the client), so robustness lives in the sync fallback."""
+    global last_gemini_error
+    if not settings.openrouter_api_key:
+        return
+    model = settings.openrouter_model
+    started = time.perf_counter()
+    chunks: List[str] = []
+    prompt_tokens = completion_tokens = None
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            with client.stream(
+                "POST",
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.openrouter_api_key}",
+                    "HTTP-Referer": settings.app_base_url,
+                    "X-Title": "AlphaFunds Analyst Tracker",
+                },
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 700,
+                    "stream": True,
+                    "stream_options": {"include_usage": True},
+                },
+            ) as resp:
+                if resp.status_code != 200:
+                    logger.warning("OpenRouter stream HTTP %s for %s", resp.status_code, model)
+                    return
+                for line in resp.iter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    payload = line[len("data:"):].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        event = json.loads(payload)
+                    except ValueError:
+                        continue
+                    usage = event.get("usage")
+                    if usage:
+                        prompt_tokens = usage.get("prompt_tokens")
+                        completion_tokens = usage.get("completion_tokens")
+                    delta = (
+                        event.get("choices", [{}])[0].get("delta", {}).get("content") or ""
+                    )
+                    if delta:
+                        chunks.append(delta)
+                        yield delta
+        text = "".join(chunks)
+        _record("openrouter", model, bool(text), started,
+                prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                error=None if text else "empty response")
+        if text:
+            last_gemini_error = None
+    except Exception as e:
+        logger.warning("OpenRouter stream error: %s", e)
+        _record("openrouter", model, False, started, error=type(e).__name__)
+        return
 
 
 def ollama_generate(prompt: str, settings: Settings, timeout: float = 20) -> Optional[str]:

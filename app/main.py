@@ -4,6 +4,7 @@ the in-process daily scheduler.
 Start with:
     uvicorn app.main:app --reload --port 8100
 """
+import json
 import logging
 import os
 import secrets
@@ -17,6 +18,7 @@ from cachetools import TTLCache
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 # UTF-8 stdout on Windows so logging never hits charmap errors.
@@ -516,6 +518,33 @@ def chat(req: ChatRequest):
     except Exception as e:
         logger.debug("chat answer telemetry skipped: %s", e)
     return ChatResponse(answer=answer, source=source)
+
+
+@app.post("/api/chat/stream")
+def chat_stream(req: ChatRequest):
+    """Streaming counterpart to /api/chat for the website's Ask AI panel:
+    Server-Sent Events, one `data:` line of JSON per chunk — {"delta": "..."}
+    while text arrives, then exactly one {"done": true, "source": "..."}.
+    WhatsApp keeps using the non-streaming /api/chat path (a single message
+    can't be streamed anyway)."""
+    from app.chat import answer_question_stream
+
+    def _events():
+        source = "overview"
+        try:
+            for event in answer_question_stream(
+                store, settings, req.question, market=req.market, symbol=req.symbol
+            ):
+                if "source" in event:
+                    source = event["source"]
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            try:
+                store.add_chat_answer(source)   # feeds the fallback-rate SLO
+            except Exception as e:
+                logger.debug("chat stream telemetry skipped: %s", e)
+
+    return StreamingResponse(_events(), media_type="text/event-stream")
 
 
 def _run_daily_and_invalidate():
