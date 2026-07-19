@@ -58,6 +58,20 @@ def test_chat_source_stats_fallback_rate(tmp_path):
     assert stats["fallback_rate"] == 0.4
 
 
+def test_chat_source_stats_excludes_out_of_scope_from_fallback_rate(tmp_path):
+    """A burst of guardrail-rejected (out-of-scope) traffic must not look
+    like the AI degrading — it's an intentional non-AI short-circuit, not
+    a fallback."""
+    s = _store(tmp_path)
+    for src in ("llm", "llm", "llm", "out-of-scope", "out-of-scope",
+                "out-of-scope", "out-of-scope", "out-of-scope"):
+        s.add_chat_answer(src)
+    stats = s.chat_source_stats(days=7)
+    assert stats["total"] == 8                       # still visible in the total
+    assert stats["by_source"]["out-of-scope"] == 5
+    assert stats["fallback_rate"] == 0.0              # 0 of 3 AI-eligible answers fell back
+
+
 # ── alerts ────────────────────────────────────────────────────────────────────
 
 def test_ai_success_alert_fires_and_cools_down(tmp_path):

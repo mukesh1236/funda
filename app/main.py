@@ -225,6 +225,7 @@ def health():
             "gemini_model": settings.gemini_model,
             "openrouter_key_set": bool(settings.openrouter_api_key),
             "openrouter_model": settings.openrouter_model,
+            "tavily_key_set": bool(settings.tavily_api_key),
             # Why the most recent LLM call failed (None = last call succeeded).
             # First place to look when chat shows fallback answers.
             "last_error": llm_mod.last_gemini_error,

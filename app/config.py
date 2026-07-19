@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_model: str = "deepseek/deepseek-chat-v3.1:free"
 
+    # Live web search (Tavily) — grounds causal/"why is X falling" questions the
+    # tracked dataset can't answer with real recent context. Free tier at
+    # https://tavily.com ; leave blank to skip web search entirely.
+    tavily_api_key: str = ""
+
     # Notifications: "console" | "whatsapp"
     notifier: str = "console"
     whatsapp_to: str = ""  # destination number when whatsapp is wired up
