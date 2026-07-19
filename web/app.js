@@ -1499,7 +1499,8 @@ async function loadSRE() {
         ${srcTotal ? `${srcRow('🤖 LLM (reasoned)', bySrc.llm || 0, '')}
           ${srcRow('⚡ Rule fallback', bySrc.rule || 0, 'warn')}
           ${srcRow('ℹ Overview fallback', bySrc.overview || 0, 'warn')}
-          ${srcRow('📊 Fund data', bySrc['fund-data'] || 0, '')}`
+          ${srcRow('📊 Fund data', bySrc['fund-data'] || 0, '')}
+          ${srcRow('🛈 Out of scope (guardrail)', bySrc['out-of-scope'] || 0, '')}`
           : '<p class="empty">No chat answers recorded yet — ask the AI something.</p>'}
       </div>
 

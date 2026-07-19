@@ -446,10 +446,10 @@ def answer_question(
     if not _in_scope(question):
         return _OUT_OF_SCOPE_REPLY, None, "out-of-scope"
 
-    # Build the feed ONCE per question — priciest input, shared by every path below.
-    feed = build_feed(store, days=30, market=market)
-
-    # 0) Fund-specific question — inject live fund data + RAG context.
+    # 0) Fund-specific question — inject live fund data + RAG context. Checked
+    # before build_feed (below) since this path resolves on its own and never
+    # reads the feed — building it first would waste the priciest input (DB
+    # scans + a live yfinance batch call) on every fund-only question.
     fund_sym = _detect_fund_ticker(question)
     if fund_sym:
         fund_context = _build_fund_context(fund_sym)
@@ -485,6 +485,9 @@ def answer_question(
         # LLM off/unreachable → structured fund data beats no answer.
         if fund_context:
             return fund_context, None, "fund-data"
+
+    # Build the feed ONCE per question — priciest input, shared by every path below.
+    feed = build_feed(store, days=30, market=market)
 
     # 1) LLM with full context — the primary answer path when configured.
     if llm_on:

@@ -701,7 +701,11 @@ class RecommendationStore:
 
     def chat_source_stats(self, days: int = 7) -> dict:
         """{total, by_source: {source: n}, fallback_rate} over the window.
-        fallback_rate = share of answers NOT produced by the LLM."""
+        fallback_rate = share of AI-eligible answers NOT produced by the LLM.
+        "out-of-scope" answers are guardrail refusals that never attempted
+        the LLM at all — they're reported in by_source/total for visibility
+        but excluded from fallback_rate so a burst of off-topic/exploit
+        traffic can't be mistaken for the AI itself degrading."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
         with self._connect() as conn:
             rows = conn.execute(
@@ -710,11 +714,12 @@ class RecommendationStore:
             ).fetchall()
         by_source = {r["source"]: r["n"] for r in rows}
         total = sum(by_source.values())
-        non_llm = sum(n for s, n in by_source.items() if s != "llm")
+        eligible = total - by_source.get("out-of-scope", 0)
+        non_llm = sum(n for s, n in by_source.items() if s not in ("llm", "out-of-scope"))
         return {
             "total": total,
             "by_source": by_source,
-            "fallback_rate": round(non_llm / total, 3) if total else None,
+            "fallback_rate": round(non_llm / eligible, 3) if eligible else None,
         }
 
     # ── LLM call metrics (AI observability) ──────────────────────────────────
