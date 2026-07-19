@@ -119,17 +119,28 @@ _QUESTION_STOPWORDS = frozenset({
     "about", "tell", "me", "of", "for", "on", "in", "doing", "today",
     "stock", "stocks", "share", "shares", "price", "analyst", "analysts",
     "rating", "does", "do", "did", "and", "or", "to", "with", "you", "your",
+    "market", "cap", "capitalization", "value", "worth", "current", "much",
+    "many", "give", "show", "get", "know", "s",
 })
 
 
 def _detect_untracked_symbol(question: str, market: str) -> Optional[str]:
     """When no tracked ticker/company matched, try resolving a stock the app
-    doesn't track (e.g. "how's Coca-Cola doing?") via the same search used by
-    the site's search bar — so the chat can answer with generic overview data
-    instead of just saying it isn't in the dataset."""
+    doesn't track (e.g. "AAPL market cap", "how's Coca-Cola doing?") so the
+    chat can answer with generic overview data instead of "not in my dataset"."""
     q = question.lower()
     if any(sig in q for sig in _BROAD_QUESTION_SIGNALS):
         return None
+
+    # An explicit ticker the user typed in caps (e.g. "AAPL") is trusted
+    # directly — same as _detect_fund_ticker does for fund symbols — no
+    # search call needed; build_stock_overview() no-ops if it isn't real.
+    for tok in re.findall(r"\b([A-Z]{1,5})\b", question):
+        if tok not in _COMMON_WORDS:
+            return tok
+
+    # Otherwise, resolve a company name (e.g. "Coca-Cola") via the same
+    # fuzzy search the site's search bar uses.
     words = re.findall(r"[a-zA-Z]+", q)
     query = " ".join(w for w in words if w not in _QUESTION_STOPWORDS)
     if not query:

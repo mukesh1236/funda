@@ -156,6 +156,16 @@ def test_untracked_symbol_resolved_via_search():
     assert search.called
 
 
+def test_explicit_uppercase_ticker_trusted_without_a_search_call():
+    """An explicit ticker the user typed in caps (e.g. "AAPL") must resolve
+    with zero network calls — regressed once, when noise words like "market
+    capitalization" threw off the fuzzy search instead."""
+    with patch("app.sources.search.search_tickers") as search:
+        result = _detect_untracked_symbol("What is AAPL's market capitalization?", "us")
+    assert result == "AAPL"
+    assert not search.called
+
+
 def test_untracked_symbol_none_when_search_finds_nothing():
     with patch("app.sources.search.search_tickers", return_value=[]):
         result = _detect_untracked_symbol("asdkjhaskjdh", "us")
