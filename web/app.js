@@ -1030,6 +1030,7 @@ $('#chatForm').addEventListener('submit', async (e) => {
       tag.className = 'chat-src';
       tag.textContent = res.source === 'rule' ? '⚡ quick data answer (AI unavailable)'
         : res.source === 'fund-data' ? '⚡ fund data (AI unavailable)'
+        : res.source === 'out-of-scope' ? '🛈 outside AlphaFunds’ scope'
         : 'ℹ data overview';
       thinking.appendChild(tag);
     }
