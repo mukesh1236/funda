@@ -12,9 +12,12 @@ These pin the fixes for two bugs that made the chatbot misbehave:
 from datetime import date
 from unittest.mock import patch
 
-from app.chat import _LLM_PROVIDERS, _detect_fund_ticker, _in_scope, answer_question
+from app.chat import (
+    _LLM_PROVIDERS, _detect_fund_ticker, _detect_untracked_symbol, _in_scope,
+    answer_question,
+)
 from app.config import Settings
-from app.models import AnalystRecommendation
+from app.models import AnalystRecommendation, Fundamentals, Returns, StockOverview
 from app.store import RecommendationStore
 
 
@@ -132,6 +135,55 @@ def test_non_causal_question_skips_web_search(tmp_path):
          patch("app.sources.tavily.search_web") as search:
         answer_question(store, settings, "which stocks have the strongest buy consensus?")
     assert not search.called
+
+
+# ── untracked-stock resolution (e.g. Coca-Cola, not in the tracked universe) ──
+
+def test_broad_questions_skip_untracked_symbol_search():
+    """'top picks' etc. are about the whole universe, not one company — must
+    not pay for a search lookup."""
+    with patch("app.sources.search.search_tickers") as search:
+        result = _detect_untracked_symbol("what are the top picks today?", "us")
+    assert result is None
+    assert not search.called
+
+
+def test_untracked_symbol_resolved_via_search():
+    with patch("app.sources.search.search_tickers",
+               return_value=[{"symbol": "KO", "name": "Coca-Cola Co", "exchange": "NYSE"}]) as search:
+        result = _detect_untracked_symbol("how's coca cola doing?", "us")
+    assert result == "KO"
+    assert search.called
+
+
+def test_untracked_symbol_none_when_search_finds_nothing():
+    with patch("app.sources.search.search_tickers", return_value=[]):
+        result = _detect_untracked_symbol("asdkjhaskjdh", "us")
+    assert result is None
+
+
+def test_untracked_stock_question_uses_overview_not_dataset_refusal(tmp_path):
+    """The actual bug being fixed: asking about a stock outside the tracked
+    universe (e.g. Coca-Cola) must feed real overview data into the LLM
+    prompt instead of silently having nothing to say about it."""
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
+    overview = StockOverview(
+        symbol="KO", company_name="Coca-Cola Co", price=62.5,
+        fundamentals=Fundamentals(sector="Consumer Defensive", pe_ratio=24.1,
+                                   dividend_yield=3.0),
+        returns=Returns(twelve_month=8.2),
+    )
+    with patch("app.chat.generate_narrative", return_value="reasoned answer") as gen, \
+         patch("app.sources.search.search_tickers",
+               return_value=[{"symbol": "KO", "name": "Coca-Cola Co", "exchange": "NYSE"}]), \
+         patch("app.service.build_stock_overview", return_value=overview):
+        answer, error, source = answer_question(store, settings, "how's coca cola doing?")
+    assert gen.called
+    prompt = gen.call_args[0][0]
+    assert "UNTRACKED STOCK KO" in prompt
+    assert "Coca-Cola" in prompt
+    assert source == "llm"
 
 
 def test_known_fund_symbol_detected_case_insensitively():
