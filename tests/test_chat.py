@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from app.chat import (
     _LLM_PROVIDERS, _detect_fund_ticker, _detect_untracked_symbol, _in_scope,
-    answer_question,
+    answer_question, answer_question_stream,
 )
 from app.config import Settings
 from app.models import AnalystRecommendation, Fundamentals, Returns, StockOverview
@@ -156,6 +156,16 @@ def test_untracked_symbol_resolved_via_search():
     assert search.called
 
 
+def test_explicit_uppercase_ticker_trusted_without_a_search_call():
+    """An explicit ticker the user typed in caps (e.g. "AAPL") must resolve
+    with zero network calls — regressed once, when noise words like "market
+    capitalization" threw off the fuzzy search instead."""
+    with patch("app.sources.search.search_tickers") as search:
+        result = _detect_untracked_symbol("What is AAPL's market capitalization?", "us")
+    assert result == "AAPL"
+    assert not search.called
+
+
 def test_untracked_symbol_none_when_search_finds_nothing():
     with patch("app.sources.search.search_tickers", return_value=[]):
         result = _detect_untracked_symbol("asdkjhaskjdh", "us")
@@ -184,6 +194,50 @@ def test_untracked_stock_question_uses_overview_not_dataset_refusal(tmp_path):
     assert "UNTRACKED STOCK KO" in prompt
     assert "Coca-Cola" in prompt
     assert source == "llm"
+
+
+# ── streaming (website chat only) ──────────────────────────────────────────────
+
+def test_stream_yields_chunks_then_done_with_source_llm(tmp_path):
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
+    with patch("app.llm.generate_narrative_stream", return_value=iter(["Hello", " world"])):
+        events = list(answer_question_stream(
+            store, settings, "which stocks have the strongest buy consensus?"))
+    assert events == [{"delta": "Hello"}, {"delta": " world"}, {"done": True, "source": "llm"}]
+
+
+def test_stream_falls_back_to_sync_path_when_streaming_yields_nothing(tmp_path):
+    """If the provider doesn't stream (or the call failed), the streaming
+    endpoint must still answer — via the full non-streaming pipeline — not
+    return an empty response."""
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
+    with patch("app.llm.generate_narrative_stream", return_value=iter([])), \
+         patch("app.chat.answer_question", return_value=("fallback answer", None, "rule")) as fb:
+        events = list(answer_question_stream(
+            store, settings, "which stocks have the strongest buy consensus?"))
+    assert fb.called
+    assert events == [{"delta": "fallback answer"}, {"done": True, "source": "rule"}]
+
+
+def test_stream_out_of_scope_skips_streaming_entirely(tmp_path):
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
+    with patch("app.llm.generate_narrative_stream") as stream_fn:
+        events = list(answer_question_stream(store, settings, "write me a poem about the ocean"))
+    assert not stream_fn.called
+    assert events[-1] == {"done": True, "source": "out-of-scope"}
+
+
+def test_stream_fund_question_skips_streaming(tmp_path):
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
+    with patch("app.llm.generate_narrative_stream") as stream_fn, \
+         patch("app.chat.answer_question", return_value=("fund answer", None, "fund-data")):
+        events = list(answer_question_stream(store, settings, "what is spy's expense ratio?"))
+    assert not stream_fn.called
+    assert events == [{"delta": "fund answer"}, {"done": True, "source": "fund-data"}]
 
 
 def test_known_fund_symbol_detected_case_insensitively():

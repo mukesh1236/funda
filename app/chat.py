@@ -119,17 +119,28 @@ _QUESTION_STOPWORDS = frozenset({
     "about", "tell", "me", "of", "for", "on", "in", "doing", "today",
     "stock", "stocks", "share", "shares", "price", "analyst", "analysts",
     "rating", "does", "do", "did", "and", "or", "to", "with", "you", "your",
+    "market", "cap", "capitalization", "value", "worth", "current", "much",
+    "many", "give", "show", "get", "know", "s",
 })
 
 
 def _detect_untracked_symbol(question: str, market: str) -> Optional[str]:
     """When no tracked ticker/company matched, try resolving a stock the app
-    doesn't track (e.g. "how's Coca-Cola doing?") via the same search used by
-    the site's search bar — so the chat can answer with generic overview data
-    instead of just saying it isn't in the dataset."""
+    doesn't track (e.g. "AAPL market cap", "how's Coca-Cola doing?") so the
+    chat can answer with generic overview data instead of "not in my dataset"."""
     q = question.lower()
     if any(sig in q for sig in _BROAD_QUESTION_SIGNALS):
         return None
+
+    # An explicit ticker the user typed in caps (e.g. "AAPL") is trusted
+    # directly — same as _detect_fund_ticker does for fund symbols — no
+    # search call needed; build_stock_overview() no-ops if it isn't real.
+    for tok in re.findall(r"\b([A-Z]{1,5})\b", question):
+        if tok not in _COMMON_WORDS:
+            return tok
+
+    # Otherwise, resolve a company name (e.g. "Coca-Cola") via the same
+    # fuzzy search the site's search bar uses.
     words = re.findall(r"[a-zA-Z]+", q)
     query = " ".join(w for w in words if w not in _QUESTION_STOPWORDS)
     if not query:
@@ -550,26 +561,7 @@ def answer_question(
 
     # 1) LLM with full context — the primary answer path when configured.
     if llm_on:
-        feed_ctx = _fmt_feed(feed)
-        lb = _fmt_leaderboard(store, market)
-        # include stock context even when the symbol comes from question text
-        detected = symbol or _detect_symbol(question, feed.stocks)
-        sym_ctx = _fmt_symbol(store, detected) if detected else ""
-        if not sym_ctx and not detected:
-            # Not a tracked stock — try resolving it anyway (e.g. "Coca-Cola")
-            # so the answer uses real data instead of "not in my dataset".
-            untracked = _detect_untracked_symbol(question, market)
-            if untracked:
-                from app.service import build_stock_overview
-                ov = build_stock_overview(untracked)
-                if ov:
-                    detected = untracked
-                    sym_ctx = _fmt_overview(ov)
-        web_ctx = ""
-        if _needs_web_context(question):
-            web_query = f"{detected} {question}" if detected else question
-            web_ctx = _web_context(web_query, settings)
-        prompt = _prompt(question, market, feed_ctx, lb, sym_ctx, web_ctx)
+        prompt = _build_main_prompt(store, settings, question, market, symbol, feed)
         answer = generate_narrative(prompt, settings, timeout=30)
         if answer:
             return answer, None, "llm"
@@ -589,3 +581,68 @@ def answer_question(
                      "(gemini / grok / ollama) and the matching API key to get "
                      "reasoned answers instead of quick data lookups.")
     return overview, None, "overview"
+
+
+def _build_main_prompt(store: RecommendationStore, settings: Settings, question: str,
+                       market: str, symbol: Optional[str], feed) -> str:
+    """Shared by the sync and streaming LLM paths: feed/leaderboard/symbol/web
+    context assembly for the primary open-ended question prompt."""
+    feed_ctx = _fmt_feed(feed)
+    lb = _fmt_leaderboard(store, market)
+    # include stock context even when the symbol comes from question text
+    detected = symbol or _detect_symbol(question, feed.stocks)
+    sym_ctx = _fmt_symbol(store, detected) if detected else ""
+    if not sym_ctx and not detected:
+        # Not a tracked stock — try resolving it anyway (e.g. "Coca-Cola")
+        # so the answer uses real data instead of "not in my dataset".
+        untracked = _detect_untracked_symbol(question, market)
+        if untracked:
+            from app.service import build_stock_overview
+            ov = build_stock_overview(untracked)
+            if ov:
+                detected = untracked
+                sym_ctx = _fmt_overview(ov)
+    web_ctx = ""
+    if _needs_web_context(question):
+        web_query = f"{detected} {question}" if detected else question
+        web_ctx = _web_context(web_query, settings)
+    return _prompt(question, market, feed_ctx, lb, sym_ctx, web_ctx)
+
+
+def answer_question_stream(
+    store: RecommendationStore,
+    settings: Settings,
+    question: str,
+    market: str = "us",
+    symbol: Optional[str] = None,
+):
+    """Streaming counterpart to answer_question, for the website chat only.
+    Yields dicts: {"delta": "<text chunk>"} for each piece of text, followed
+    by exactly one final {"done": True, "source": <source>}.
+
+    Only the primary open-ended LLM path streams token-by-token (via
+    OpenRouter) — the guardrail refusal, fund questions, and rule/overview
+    fallbacks are already instant/local (or need the full multi-model retry
+    chain), so they compute their complete answer via answer_question() and
+    yield it as a single chunk. This keeps one streaming protocol for the
+    frontend without duplicating the guardrail/fund/fallback logic."""
+    llm_on = settings.summary_provider in _LLM_PROVIDERS
+    if _in_scope(question) and llm_on and not _detect_fund_ticker(question):
+        feed = build_feed(store, days=30, market=market)
+        prompt = _build_main_prompt(store, settings, question, market, symbol, feed)
+
+        from app.llm import generate_narrative_stream
+        chunks: List[str] = []
+        for chunk in generate_narrative_stream(prompt, settings, timeout=30):
+            chunks.append(chunk)
+            yield {"delta": chunk}
+        if "".join(chunks).strip():
+            yield {"done": True, "source": "llm"}
+            return
+        # Streaming unavailable/empty (provider doesn't support it yet, or the
+        # call failed) — fall through to the full non-streaming pipeline below,
+        # which retries via the multi-model fallback chain.
+
+    answer, error, source = answer_question(store, settings, question, market, symbol)
+    yield {"delta": answer or ""}
+    yield {"done": True, "source": source}

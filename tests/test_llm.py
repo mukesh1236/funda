@@ -87,6 +87,49 @@ def test_candidates_use_live_catalog_when_hardcoded_fallbacks_are_all_stale():
     assert "dead/model:free" not in out
 
 
+def _stream_client(status, lines):
+    """Mocks httpx.Client().stream(...) as a context manager yielding `lines`
+    from iter_lines() when status is 200."""
+    stream_resp = MagicMock()
+    stream_resp.status_code = status
+    stream_resp.iter_lines.return_value = iter(lines)
+    stream_cm = MagicMock()
+    stream_cm.__enter__.return_value = stream_resp
+    stream_cm.__exit__.return_value = False
+    c = MagicMock()
+    c.__enter__.return_value = c
+    c.__exit__.return_value = False
+    c.stream.return_value = stream_cm
+    return c
+
+
+def test_openrouter_stream_yields_chunks_in_order():
+    settings = Settings(openrouter_api_key="k", openrouter_model="m1:free")
+    lines = [
+        'data: {"choices":[{"delta":{"content":"Hello"}}]}',
+        'data: {"choices":[{"delta":{"content":" world"}}]}',
+        'data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":5,"completion_tokens":2}}',
+        "data: [DONE]",
+    ]
+    with patch("app.llm.httpx.Client", return_value=_stream_client(200, lines)):
+        chunks = list(llm.openrouter_generate_stream("hello", settings))
+    assert chunks == ["Hello", " world"]
+    assert llm.last_gemini_error is None
+
+
+def test_openrouter_stream_yields_nothing_on_non_200():
+    settings = Settings(openrouter_api_key="k", openrouter_model="m1:free")
+    with patch("app.llm.httpx.Client", return_value=_stream_client(429, [])):
+        chunks = list(llm.openrouter_generate_stream("hello", settings))
+    assert chunks == []
+
+
+def test_openrouter_stream_no_key_short_circuits():
+    settings = Settings(openrouter_api_key="", openrouter_model="m1:free")
+    chunks = list(llm.openrouter_generate_stream("hello", settings))
+    assert chunks == []
+
+
 def test_openrouter_no_key_short_circuits():
     settings = Settings(openrouter_api_key="", openrouter_model="m1:free")
     out = llm.openrouter_generate("hello", settings)
