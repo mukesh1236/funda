@@ -95,6 +95,9 @@ class Settings(BaseSettings):
     # Observability — Sentry error tracking + tracing. Empty → disabled.
     # Set SENTRY_DSN in .env / Railway Variables to enable.
     sentry_dsn: str = ""
+    # Share of requests traced for performance monitoring (0.0–1.0). 0.1 = 10%,
+    # a sane default that keeps Sentry's transaction quota from filling up.
+    sentry_traces_sample_rate: float = 0.1
 
     # Polygon.io licensed analyst data. Free Starter plan (5 req/min).
     # Sign up at https://polygon.io — set POLYGON_API_KEY in .env to enable.
