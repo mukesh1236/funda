@@ -271,18 +271,42 @@ def test_stream_yields_chunks_then_done_with_source_llm(tmp_path):
     assert events == [{"delta": "Hello"}, {"delta": " world"}, {"done": True, "source": "llm"}]
 
 
-def test_stream_falls_back_to_sync_path_when_streaming_yields_nothing(tmp_path):
-    """If the provider doesn't stream (or the call failed), the streaming
-    endpoint must still answer — via the full non-streaming pipeline — not
-    return an empty response."""
+def test_stream_llm_failure_serves_grounded_fallback_without_retrying_llm(tmp_path):
+    """When streaming yields nothing (LLM down/timed out), the client must get
+    a graceful grounded data answer + a 'try again' note — and the LLM must NOT
+    be re-attempted (that would just stall again). The user never sees an error;
+    the failure is for the admin logs."""
     store = _make_store(tmp_path, seed=True)
     settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
     with patch("app.llm.generate_narrative_stream", return_value=iter([])), \
-         patch("app.chat.answer_question", return_value=("fallback answer", None, "rule")) as fb:
+         patch("app.chat.answer_question") as aq:   # must NOT be called
         events = list(answer_question_stream(
             store, settings, "which stocks have the strongest buy consensus?"))
-    assert fb.called
-    assert events == [{"delta": "fallback answer"}, {"done": True, "source": "rule"}]
+    assert not aq.called
+    assert events[-1]["done"] is True
+    assert events[-1]["source"] in ("rule", "overview")
+    body = events[0]["delta"]
+    assert "try again" in body.lower()             # friendly retry note
+    assert "NVDA" in body or "strongest" in body.lower()   # real grounded data
+
+
+def test_stream_llm_exception_mid_flight_is_caught_and_degrades(tmp_path):
+    """A raw exception from the stream generator must never propagate to the
+    client — it degrades to the grounded fallback."""
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
+
+    def _boom(*a, **k):
+        yield "partial"
+        raise RuntimeError("stream blew up")
+
+    with patch("app.llm.generate_narrative_stream", side_effect=_boom):
+        events = list(answer_question_stream(
+            store, settings, "which stocks have the strongest buy consensus?"))
+    # partial text was streamed; since some text arrived, it's treated as the
+    # answer (source llm) rather than erroring out.
+    assert {"delta": "partial"} in events
+    assert events[-1]["done"] is True
 
 
 def test_stream_out_of_scope_skips_streaming_entirely(tmp_path):

@@ -344,6 +344,24 @@ def _overview(feed) -> str:
     )
 
 
+_AI_BUSY_NOTE = (
+    "\n\n⚡ The AI is busy right now, so here's a quick data answer — "
+    "please try again in a moment for a fuller explanation."
+)
+
+
+def _grounded_fallback(store: RecommendationStore, market: str, question: str,
+                       symbol: Optional[str], feed) -> Tuple[str, str]:
+    """Degraded but always-useful answer when the LLM is unavailable mid-stream.
+    Uses the deterministic rule engine (then the data overview) on the feed we
+    already built — NO second LLM attempt — and appends a friendly "try again"
+    note. Returns (answer, source)."""
+    rule = _rule_answer(store, market, question, symbol, feed)
+    if rule:
+        return rule + _AI_BUSY_NOTE, "rule"
+    return _overview(feed) + _AI_BUSY_NOTE, "overview"
+
+
 # ── LLM context (open-ended questions) ────────────────────────────────────────
 def _fmt_feed(feed) -> str:
     lines = []
@@ -680,16 +698,33 @@ def answer_question_stream(
 
         from app.llm import generate_narrative_stream
         chunks: List[str] = []
-        for chunk in generate_narrative_stream(prompt, settings, timeout=30):
-            chunks.append(chunk)
-            yield {"delta": chunk}
+        try:
+            for chunk in generate_narrative_stream(prompt, settings, timeout=30):
+                chunks.append(chunk)
+                yield {"delta": chunk}
+        except Exception as e:   # never leak a raw stream error to the client
+            logger.warning("chat stream errored mid-flight: %s", e)
         if "".join(chunks).strip():
             yield {"done": True, "source": "llm"}
             return
-        # Streaming unavailable/empty (provider doesn't support it yet, or the
-        # call failed) — fall through to the full non-streaming pipeline below,
-        # which retries via the multi-model fallback chain.
 
+        # Streaming produced nothing (provider can't stream, timed out, or the
+        # call failed). Do NOT re-attempt the LLM — go straight to the grounded
+        # data answer so the user always gets something useful, fast. The
+        # failure is logged + recorded (llm_calls / last_error) for the admin;
+        # the user just sees a graceful degraded answer.
+        from app import llm
+        logger.warning(
+            "chat stream produced no text — serving grounded fallback (llm_error=%s)",
+            llm.last_gemini_error,
+        )
+        answer, source = _grounded_fallback(store, market, question, symbol, feed)
+        yield {"delta": answer}
+        yield {"done": True, "source": source}
+        return
+
+    # Out-of-scope / fund / LLM-off → the full pipeline (fast/local, or the
+    # fund path with its own graceful data fallback). Never raises.
     answer, error, source = answer_question(store, settings, question, market, symbol)
     yield {"delta": answer or ""}
     yield {"done": True, "source": source}

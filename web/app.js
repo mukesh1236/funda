@@ -1067,13 +1067,15 @@ $('#chatForm').addEventListener('submit', async (e) => {
       thinking.appendChild(tag);
     }
   } catch (err) {
+    // Never show a raw/technical error to the user — degrade to a calm,
+    // reassuring message and invite a retry. (The server already serves a
+    // grounded data answer on AI failure; this only fires if the request
+    // itself was aborted or the network dropped.) Real errors are in the
+    // server logs / SRE dashboard for the admin.
     thinking.classList.remove('pending');
-    thinking.classList.add('err');
-    thinking.textContent = err.name === 'AbortError'
-      ? (gotText
-          ? 'The answer stopped mid-way — please try again.'
-          : 'The AI didn’t respond in time. Free AI tiers can be busy — please try again in a moment.')
-      : (err.message || 'Could not reach the AI.');
+    if (!gotText) {
+      thinking.textContent = 'I couldn’t get an answer just now — please try again in a moment.';
+    }
   } finally {
     clearTimeout(timer);
     $('#chatSend').disabled = false;
