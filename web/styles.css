@@ -576,6 +576,10 @@ td .caret { margin-right: 6px; }
 .chat-msg.bot.pending { color: var(--muted); font-style: italic; }
 .chat-msg.bot.err { color: var(--bad-hi); }
 .chat-src { margin-top: 7px; font-size: 10.5px; color: var(--muted); font-style: italic; }
+/* The intro is authored as indented multi-line HTML; without this the parent's
+   white-space:pre-wrap (needed for streamed answers) would render those source
+   newlines/indents as stray gaps. */
+.chat-intro { white-space: normal; }
 .chat-can { margin: 7px 0 6px; padding-left: 16px; display: flex; flex-direction: column; gap: 4px; }
 .chat-can li { font-size: 12.5px; line-height: 1.35; }
 .chat-note { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); font-style: italic; }
