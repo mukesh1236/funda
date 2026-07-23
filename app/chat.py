@@ -150,13 +150,19 @@ def _detect_untracked_symbol(question: str, market: str) -> Optional[str]:
     return hits[0]["symbol"] if hits else None
 
 
-# Fundamentals (P/E, revenue, market cap, margins…) live in the stock-overview,
-# NOT the analyst feed — so a "fundamentals of META" question needs the overview
-# pulled in even for a tracked stock. These signal such questions.
+# Fundamentals (P/E, revenue, market cap, margins…) and company news live in the
+# stock-overview, NOT the analyst feed — so a "fundamentals of META" or "news on
+# Apple" question needs the overview pulled in even for a tracked stock. These
+# signal such questions.
 _FUNDAMENTALS_SIGNALS = (
     "fundamental", "valuation", "p/e", "pe ratio", "p / e", "market cap",
     "marketcap", "revenue", "earnings", "eps", "profit", "margin", "financial",
     "balance sheet", "cash flow", "debt", "dividend", "roe", "book value", "beta",
+)
+_NEWS_SIGNALS = (
+    "news", "headline", "latest", "recent", "happening", "happened", "update",
+    "announce", "announcement", "report", "story", "what's new", "whats new",
+    "going on", "development",
 )
 
 
@@ -164,16 +170,20 @@ def _needs_fundamentals(question: str) -> bool:
     return any(s in question.lower() for s in _FUNDAMENTALS_SIGNALS)
 
 
+def _needs_news(question: str) -> bool:
+    return any(s in question.lower() for s in _NEWS_SIGNALS)
+
+
 def _fmt_overview(ov, supplement: bool = False) -> str:
     """Generic profile context (price, sector, market cap, P/E, dividend, 12m
-    return) — the standalone stock-overview data. `supplement=True` when it's
-    appended to a tracked stock's analyst context (so the header doesn't wrongly
-    claim the stock is untracked)."""
+    return, recent news) — the standalone stock-overview data. `supplement=True`
+    when it's appended to a tracked stock's analyst context (so the header
+    doesn't wrongly claim the stock is untracked)."""
     if supplement:
-        parts = [f"FUNDAMENTALS for {ov.symbol} ({ov.company_name or ov.symbol}):"]
+        parts = [f"COMPANY PROFILE + NEWS for {ov.symbol} ({ov.company_name or ov.symbol}):"]
     else:
         parts = [
-            f"UNTRACKED STOCK {ov.symbol} ({ov.company_name or ov.symbol}) — no analyst "
+            f"STOCK {ov.symbol} ({ov.company_name or ov.symbol}) — no analyst "
             "recommendations tracked for this one, but general market data is available:"
         ]
     if ov.price is not None:
@@ -191,7 +201,15 @@ def _fmt_overview(ov, supplement: bool = False) -> str:
     r = ov.returns
     if r and r.twelve_month is not None:
         parts.append(f"12-month return: {r.twelve_month:+.1f}%")
-    return " ".join(parts)
+    text = " ".join(parts)
+    news = getattr(ov, "news", None) or []
+    if news:
+        headlines = "\n".join(
+            f"- {n.title}" + (f" ({n.publisher})" if getattr(n, "publisher", None) else "")
+            for n in news[:5]
+        )
+        text += f"\nRecent company news:\n{headlines}"
+    return text
 
 
 def _detect_symbol(question: str, stocks: list) -> Optional[str]:
@@ -621,16 +639,18 @@ def _build_main_prompt(store: RecommendationStore, settings: Settings, question:
             if ov:
                 detected = untracked
                 sym_ctx = _fmt_overview(ov)
-    elif sym_ctx and detected and _needs_fundamentals(question):
-        # Tracked stock, but the question wants fundamentals (P/E, revenue,
-        # market cap…) which the analyst feed doesn't carry — pull the overview
-        # in as a supplement so the answer isn't "no fundamentals in the data".
+    elif sym_ctx and detected and (_needs_fundamentals(question) or _needs_news(question)):
+        # Tracked stock, but the question wants fundamentals (P/E, revenue…) or
+        # company news — neither is in the analyst feed. Pull the overview in as
+        # a supplement so the answer isn't "not in the dataset".
         from app.service import build_stock_overview
         ov = build_stock_overview(detected)
         if ov:
             sym_ctx = f"{sym_ctx}\n\n{_fmt_overview(ov, supplement=True)}"
     web_ctx = ""
-    if _needs_web_context(question):
+    if _needs_web_context(question) or _needs_news(question):
+        # Company-news / "what's happening" questions get live web results too,
+        # so the answer reflects today's headlines, not just the cached feed.
         web_query = f"{detected} {question}" if detected else question
         web_ctx = _web_context(web_query, settings)
     return _prompt(question, market, feed_ctx, lb, sym_ctx, web_ctx)

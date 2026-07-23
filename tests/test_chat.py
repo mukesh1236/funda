@@ -17,7 +17,9 @@ from app.chat import (
     answer_question, answer_question_stream,
 )
 from app.config import Settings
-from app.models import AnalystRecommendation, Fundamentals, Returns, StockOverview
+from app.models import (
+    AnalystRecommendation, Fundamentals, NewsItem, Returns, StockOverview,
+)
 from app.store import RecommendationStore
 
 
@@ -191,7 +193,7 @@ def test_untracked_stock_question_uses_overview_not_dataset_refusal(tmp_path):
         answer, error, source = answer_question(store, settings, "how's coca cola doing?")
     assert gen.called
     prompt = gen.call_args[0][0]
-    assert "UNTRACKED STOCK KO" in prompt
+    assert "STOCK KO" in prompt
     assert "Coca-Cola" in prompt
     assert source == "llm"
 
@@ -216,7 +218,7 @@ def test_fundamentals_question_injects_overview_for_tracked_stock(tmp_path):
         answer, error, source = answer_question(
             store, settings, "what are the fundamentals of Meta")
     prompt = gen.call_args[0][0]
-    assert "FUNDAMENTALS for META" in prompt
+    assert "COMPANY PROFILE + NEWS for META" in prompt
     assert "P/E: 28.5" in prompt
     assert "analyst data" in prompt   # still keeps the analyst context too
 
@@ -232,6 +234,30 @@ def test_non_fundamentals_question_skips_overview_fetch(tmp_path):
          patch("app.service.build_stock_overview") as ov:
         answer_question(store, settings, "is NVDA a strong buy?")
     assert not ov.called
+
+
+def test_news_question_injects_company_news_and_web_for_tracked_stock(tmp_path):
+    """A 'latest news on X' question about a tracked stock must pull the
+    company news (from the overview) AND live web results into the prompt."""
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key",
+                        tavily_api_key="tvly-key")
+    ov = StockOverview(
+        symbol="NVDA", company_name="Nvidia", price=180.0,
+        news=[NewsItem(title="Nvidia unveils new chip", publisher="Reuters")],
+    )
+    web = [{"title": "Nvidia rallies on AI demand", "url": "https://x.test/1",
+            "content": "Shares climbed after strong guidance."}]
+    with patch("app.chat.generate_narrative", return_value="reasoned answer") as gen, \
+         patch("app.chat._detect_symbol", return_value="NVDA"), \
+         patch("app.chat._fmt_symbol", return_value="FOCUS STOCK NVDA: analyst data"), \
+         patch("app.service.build_stock_overview", return_value=ov), \
+         patch("app.sources.tavily.search_web", return_value=web):
+        answer_question(store, settings, "what's the latest news on NVDA?")
+    prompt = gen.call_args[0][0]
+    assert "Nvidia unveils new chip" in prompt       # company news from overview
+    assert "LIVE WEB RESULTS" in prompt              # live web too
+    assert "strong guidance" in prompt
 
 
 # ── streaming (website chat only) ──────────────────────────────────────────────
