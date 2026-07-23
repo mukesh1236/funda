@@ -708,14 +708,24 @@ def answer_question_stream(
             yield {"done": True, "source": "llm"}
             return
 
-        # Streaming produced nothing (provider can't stream, timed out, or the
-        # call failed). Do NOT re-attempt the LLM — go straight to the grounded
-        # data answer so the user always gets something useful, fast. The
-        # failure is logged + recorded (llm_calls / last_error) for the admin;
-        # the user just sees a graceful degraded answer.
+        # Streaming produced nothing. Before giving up on the AI, try the robust
+        # NON-streaming path ONCE (reusing the prompt we built) — it runs the
+        # full multi-model catalog fallback, so it recovers from failures the
+        # single-model stream can't (e.g. a retired model slug, or a model that
+        # doesn't support streaming). This is what keeps a working LLM from
+        # being wrongly reported "unavailable" on every question.
+        answer = generate_narrative(prompt, settings, timeout=30)
+        if answer:
+            yield {"delta": answer}
+            yield {"done": True, "source": "llm"}
+            return
+
+        # LLM genuinely unavailable → grounded data answer + a friendly note.
+        # Logged/recorded (llm_calls, last_error, SRE dashboard) for the admin;
+        # the user just sees a graceful degraded answer, never a raw error.
         from app import llm
         logger.warning(
-            "chat stream produced no text — serving grounded fallback (llm_error=%s)",
+            "chat: LLM unavailable (stream + sync both failed, err=%s) — grounded fallback",
             llm.last_gemini_error,
         )
         answer, source = _grounded_fallback(store, market, question, symbol, feed)
