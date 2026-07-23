@@ -1001,10 +1001,16 @@ $('#chatForm').addEventListener('submit', async (e) => {
   $('#chatScope').textContent = chatScopeLabel();
   const thinking = addChatMsg('Thinking…', 'bot pending');
   $('#chatSend').disabled = true;
-  // Hard client-side timeout: a hung request must never leave the chat
-  // stuck on "Thinking…" forever.
+  // Inactivity timeout: abort only if NO data arrives for this long. It resets
+  // on every streamed chunk, so a slow-but-progressing answer is never cut off
+  // (free LLM tiers can be slow) — only a genuinely hung request aborts.
+  const STALL_MS = 45000;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 90000);
+  let timer = setTimeout(() => ctrl.abort(), STALL_MS);
+  const resetStall = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => ctrl.abort(), STALL_MS);
+  };
   let gotText = false;
   let source = null;
   try {
@@ -1028,6 +1034,7 @@ $('#chatForm').addEventListener('submit', async (e) => {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
+      resetStall();   // data is flowing — keep the stream alive
       buf += decoder.decode(value, { stream: true });
       let sep;
       while ((sep = buf.indexOf('\n\n')) !== -1) {
@@ -1060,11 +1067,15 @@ $('#chatForm').addEventListener('submit', async (e) => {
       thinking.appendChild(tag);
     }
   } catch (err) {
+    // Never show a raw/technical error to the user — degrade to a calm,
+    // reassuring message and invite a retry. (The server already serves a
+    // grounded data answer on AI failure; this only fires if the request
+    // itself was aborted or the network dropped.) Real errors are in the
+    // server logs / SRE dashboard for the admin.
     thinking.classList.remove('pending');
-    thinking.classList.add('err');
-    thinking.textContent = err.name === 'AbortError'
-      ? 'The AI took too long to answer. Please try again — if this keeps happening, check /api/health → llm.last_error.'
-      : (err.message || 'Could not reach the AI.');
+    if (!gotText) {
+      thinking.textContent = 'I couldn’t get an answer just now — please try again in a moment.';
+    }
   } finally {
     clearTimeout(timer);
     $('#chatSend').disabled = false;

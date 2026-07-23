@@ -17,7 +17,9 @@ from app.chat import (
     answer_question, answer_question_stream,
 )
 from app.config import Settings
-from app.models import AnalystRecommendation, Fundamentals, Returns, StockOverview
+from app.models import (
+    AnalystRecommendation, Fundamentals, NewsItem, Returns, StockOverview,
+)
 from app.store import RecommendationStore
 
 
@@ -191,9 +193,71 @@ def test_untracked_stock_question_uses_overview_not_dataset_refusal(tmp_path):
         answer, error, source = answer_question(store, settings, "how's coca cola doing?")
     assert gen.called
     prompt = gen.call_args[0][0]
-    assert "UNTRACKED STOCK KO" in prompt
+    assert "STOCK KO" in prompt
     assert "Coca-Cola" in prompt
     assert source == "llm"
+
+
+# ── fundamentals injection for tracked stocks ──────────────────────────────────
+
+def test_fundamentals_question_injects_overview_for_tracked_stock(tmp_path):
+    """A tracked stock (META) has analyst data but no fundamentals in the feed;
+    a 'fundamentals of Meta' question must pull the stock-overview in so the
+    answer isn't 'no fundamentals in the dataset'."""
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
+    ov = StockOverview(
+        symbol="META", company_name="Meta Platforms", price=822.0,
+        fundamentals=Fundamentals(sector="Communication Services",
+                                  market_cap=2_100_000_000_000, pe_ratio=28.5),
+    )
+    with patch("app.chat.generate_narrative", return_value="reasoned answer") as gen, \
+         patch("app.chat._detect_symbol", return_value="META"), \
+         patch("app.chat._fmt_symbol", return_value="FOCUS STOCK META: analyst data"), \
+         patch("app.service.build_stock_overview", return_value=ov):
+        answer, error, source = answer_question(
+            store, settings, "what are the fundamentals of Meta")
+    prompt = gen.call_args[0][0]
+    assert "COMPANY PROFILE + NEWS for META" in prompt
+    assert "P/E: 28.5" in prompt
+    assert "analyst data" in prompt   # still keeps the analyst context too
+
+
+def test_non_fundamentals_question_skips_overview_fetch(tmp_path):
+    """A plain analyst question about a tracked stock must NOT pay for the
+    extra stock-overview fetch."""
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
+    with patch("app.chat.generate_narrative", return_value="reasoned answer"), \
+         patch("app.chat._detect_symbol", return_value="NVDA"), \
+         patch("app.chat._fmt_symbol", return_value="FOCUS STOCK NVDA"), \
+         patch("app.service.build_stock_overview") as ov:
+        answer_question(store, settings, "is NVDA a strong buy?")
+    assert not ov.called
+
+
+def test_news_question_injects_company_news_and_web_for_tracked_stock(tmp_path):
+    """A 'latest news on X' question about a tracked stock must pull the
+    company news (from the overview) AND live web results into the prompt."""
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key",
+                        tavily_api_key="tvly-key")
+    ov = StockOverview(
+        symbol="NVDA", company_name="Nvidia", price=180.0,
+        news=[NewsItem(title="Nvidia unveils new chip", publisher="Reuters")],
+    )
+    web = [{"title": "Nvidia rallies on AI demand", "url": "https://x.test/1",
+            "content": "Shares climbed after strong guidance."}]
+    with patch("app.chat.generate_narrative", return_value="reasoned answer") as gen, \
+         patch("app.chat._detect_symbol", return_value="NVDA"), \
+         patch("app.chat._fmt_symbol", return_value="FOCUS STOCK NVDA: analyst data"), \
+         patch("app.service.build_stock_overview", return_value=ov), \
+         patch("app.sources.tavily.search_web", return_value=web):
+        answer_question(store, settings, "what's the latest news on NVDA?")
+    prompt = gen.call_args[0][0]
+    assert "Nvidia unveils new chip" in prompt       # company news from overview
+    assert "LIVE WEB RESULTS" in prompt              # live web too
+    assert "strong guidance" in prompt
 
 
 # ── streaming (website chat only) ──────────────────────────────────────────────
@@ -207,18 +271,42 @@ def test_stream_yields_chunks_then_done_with_source_llm(tmp_path):
     assert events == [{"delta": "Hello"}, {"delta": " world"}, {"done": True, "source": "llm"}]
 
 
-def test_stream_falls_back_to_sync_path_when_streaming_yields_nothing(tmp_path):
-    """If the provider doesn't stream (or the call failed), the streaming
-    endpoint must still answer — via the full non-streaming pipeline — not
-    return an empty response."""
+def test_stream_llm_failure_serves_grounded_fallback_without_retrying_llm(tmp_path):
+    """When streaming yields nothing (LLM down/timed out), the client must get
+    a graceful grounded data answer + a 'try again' note — and the LLM must NOT
+    be re-attempted (that would just stall again). The user never sees an error;
+    the failure is for the admin logs."""
     store = _make_store(tmp_path, seed=True)
     settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
     with patch("app.llm.generate_narrative_stream", return_value=iter([])), \
-         patch("app.chat.answer_question", return_value=("fallback answer", None, "rule")) as fb:
+         patch("app.chat.answer_question") as aq:   # must NOT be called
         events = list(answer_question_stream(
             store, settings, "which stocks have the strongest buy consensus?"))
-    assert fb.called
-    assert events == [{"delta": "fallback answer"}, {"done": True, "source": "rule"}]
+    assert not aq.called
+    assert events[-1]["done"] is True
+    assert events[-1]["source"] in ("rule", "overview")
+    body = events[0]["delta"]
+    assert "try again" in body.lower()             # friendly retry note
+    assert "NVDA" in body or "strongest" in body.lower()   # real grounded data
+
+
+def test_stream_llm_exception_mid_flight_is_caught_and_degrades(tmp_path):
+    """A raw exception from the stream generator must never propagate to the
+    client — it degrades to the grounded fallback."""
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
+
+    def _boom(*a, **k):
+        yield "partial"
+        raise RuntimeError("stream blew up")
+
+    with patch("app.llm.generate_narrative_stream", side_effect=_boom):
+        events = list(answer_question_stream(
+            store, settings, "which stocks have the strongest buy consensus?"))
+    # partial text was streamed; since some text arrived, it's treated as the
+    # answer (source llm) rather than erroring out.
+    assert {"delta": "partial"} in events
+    assert events[-1]["done"] is True
 
 
 def test_stream_out_of_scope_skips_streaming_entirely(tmp_path):

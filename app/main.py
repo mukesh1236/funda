@@ -76,13 +76,17 @@ settings = get_settings()
 
 if settings.sentry_dsn:
     import sentry_sdk
+    # Tag events by environment so prod noise doesn't mix with local runs in
+    # the Sentry dashboard. Local dev points app_base_url at localhost.
+    _env = "development" if "localhost" in settings.app_base_url else "production"
     sentry_sdk.init(
         dsn=settings.sentry_dsn,
-        traces_sample_rate=0.1,
-        profiles_sample_rate=0.1,
+        environment=_env,
+        traces_sample_rate=settings.sentry_traces_sample_rate,
+        profiles_sample_rate=settings.sentry_traces_sample_rate,
         send_default_pii=False,
     )
-    logger.info("Sentry enabled.")
+    logger.info("Sentry enabled (environment=%s).", _env)
 
 store = RecommendationStore(settings.recommendations_db_path)
 _scheduler = None
@@ -158,7 +162,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+class SelectiveGZipMiddleware(GZipMiddleware):
+    """GZip everything EXCEPT the chat SSE stream. GZip buffers a response to
+    compress it, which defeats Server-Sent Events — the browser would sit on
+    'Thinking…' and then get the whole answer at once instead of token-by-token.
+    So the streaming route bypasses compression entirely."""
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http" and scope.get("path") == "/api/chat/stream":
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+
+app.add_middleware(SelectiveGZipMiddleware, minimum_size=1000)
 
 
 @app.middleware("http")
@@ -219,6 +237,7 @@ def health():
         "universe_size_in": len(settings.universe("in")),
         "sources": sources,
         "scheduler": settings.enable_scheduler,
+        "sentry": bool(settings.sentry_dsn),   # True once SENTRY_DSN is set
         "last_updated": store.last_daily_run(),
         "daily_run_time": f"{settings.daily_job_hour:02d}:{settings.daily_job_minute:02d}",
         "llm": {
@@ -350,6 +369,16 @@ def admin_sre_metrics(_: dict = Depends(require_admin)):
         "chat_sources": store.chat_source_stats(days=7),
         "alerts": recent_alerts(20),
     }
+
+
+@app.post("/api/admin/sentry-test")
+def admin_sentry_test(_: dict = Depends(require_admin)):
+    """Deliberately raise so a test error shows up in Sentry — the one-click
+    way to confirm the SENTRY_DSN wiring actually reports. Admin only. Returns
+    503 (not 500) with a clear message if Sentry isn't configured."""
+    if not settings.sentry_dsn:
+        raise HTTPException(503, detail="Sentry is not configured (SENTRY_DSN is empty).")
+    raise RuntimeError("AlphaFunds Sentry test error — triggered from /api/admin/sentry-test")
 
 
 @app.get("/api/themes", response_model=ThemesResult)
@@ -544,7 +573,16 @@ def chat_stream(req: ChatRequest):
             except Exception as e:
                 logger.debug("chat stream telemetry skipped: %s", e)
 
-    return StreamingResponse(_events(), media_type="text/event-stream")
+    return StreamingResponse(
+        _events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # Tell nginx / Railway's proxy not to buffer the stream, or tokens
+            # would pile up proxy-side and arrive all at once anyway.
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _run_daily_and_invalidate():

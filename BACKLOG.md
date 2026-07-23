@@ -55,9 +55,59 @@ already scoped) → S1 → S6 → S7/S8/S9 (config-only) → S10/S11 (opportunis
 |---|------|-----|
 | F1 | **Watchlist price alerts** | Notify user when stock crosses analyst target. `notifications/` already stubs this — highest value, lowest effort. |
 | F2 | **Password reset via email** | Already deferred from auth session. Needs email sender (SendGrid / SES) + `itsdangerous` timed token. |
-| F3 | **Portfolio tracking** | Shares + cost basis + P&L view alongside the watchlist. Separate `positions` table. |
+| F3 | **Real brokerage / retirement account integration** | Connect real accounts (Robinhood, 401k) → analyze actual holdings, WhatsApp portfolio updates. Full plan below (§F3 detail). |
 | F4 | **Analyst accuracy backtesting** | "Which firm's calls actually hit?" The append-only history + outcomes table already supports this — it's a query + UI. Your real product differentiator. |
 | F5 | **Account management page** | Change password UI, data export (GDPR), account deletion. |
+
+### F3 detail — Real brokerage / retirement account integration
+
+**Goal:** let a user connect real accounts (Robinhood, other brokers,
+retirement/401k) so the app pulls actual positions, analyzes them (return
+attribution, overlap vs funds), cross-references them against the analyst
+signals already tracked, and pushes portfolio updates to WhatsApp.
+
+**Hard constraints that shape the design:**
+- **Robinhood has no official public API** — real connections require an
+  aggregator. Recommended: **SnapTrade** (retail-broker-focused: Robinhood,
+  Fidelity, Vanguard, 401k providers; free dev tier; read-only). Plaid
+  Investments is the alternative but is approval-gated, pricier, weaker on
+  Robinhood.
+- **"Real-time" is two layers:** aggregators sync *holdings snapshots* (≈daily),
+  not live ticks. Live value/day-change comes from re-pricing held quantities
+  with quotes — the app already does this (`get_current_price`,
+  `_batch_day_changes` in `app/service.py`).
+
+**Phased build (recommended: Phase 1 first — zero third-party approval):**
+
+- **Phase 1 — manual + CSV import.** New per-user `holdings` table (`user_id`,
+  `account_id`, `account_name`, `symbol`, `quantity`, `cost_basis`, `as_of`,
+  `source`) mirroring `fund_portfolio`'s shape (`store.py:170`). New
+  `app/portfolio.py` (mirrors `app/funds.py`): `build_portfolio` (live-repriced
+  positions + totals), `portfolio_drivers` (reuse `pareto_drivers`,
+  `app/fund_analytics.py:15`), `compare_to_fund` (reuse `_compare_holdings`,
+  `app/funds.py:84`). Router mounted like `funds_router`, gated with
+  `require_beta`. Frontend "My Portfolio" view reusing existing card/table/meter
+  components. WhatsApp: add a portfolio line to `_format_brief` (`jobs.py:179`)
+  in the 8am brief + a "my portfolio" intent in `answer_question`.
+- **Phase 2 — SnapTrade auto-connect.** `snaptrade_client_id/consumer_key` in
+  config; `brokerage_connections` table (mirror `bind_whatsapp` upsert,
+  `store.py:511`); `app/sources/snaptrade.py` (register → portal URL →
+  list_accounts/list_positions → normalize → `replace_account_holdings`); daily
+  re-sync job in `main.py` lifespan. Everything downstream already consumes the
+  `holdings` table, so Phase 2 is a pure data-source swap.
+
+**Reuse (already holdings-source-agnostic):** `pareto_drivers`,
+`batch_period_returns` (`app/fund_analytics.py`), `_compare_holdings`
+(`app/funds.py`), price feeds (`app/sources/prices.py`,
+`app/service.py::_batch_day_changes`), the WhatsApp brief job
+(`app/jobs.py::send_whatsapp_briefs`), and the shared chat brain
+(`app/chat.py::answer_question`).
+
+**Security:** read-only broker scopes only (never trading); Phase-2 broker
+secrets encrypted at rest (Fernet — no encryption helper exists today, add one;
+relates to the plaintext-secrets class flagged in P1); never log or send broker
+secrets to the LLM; keep the "analysis, not investment advice" disclaimer on
+portfolio replies.
 
 ---
 
@@ -73,5 +123,6 @@ already scoped) → S1 → S6 → S7/S8/S9 (config-only) → S10/S11 (opportunis
 
 ---
 
-*Last updated: 2026-07-16 (security audit added S5–S11). Completed: (a) feed
-N+1 bulk queries, (b) scheduler single-run DB lock.*
+*Last updated: 2026-07-22 (F3 expanded into full brokerage/retirement
+integration plan). Completed: (a) feed N+1 bulk queries, (b) scheduler
+single-run DB lock.*

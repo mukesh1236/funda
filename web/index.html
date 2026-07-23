@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=28" />
+  <link rel="stylesheet" href="/styles.css?v=32" />
 </head>
 <body>
 <div class="app-shell">
@@ -164,12 +164,22 @@
     <button id="chatClose" class="chat-x" aria-label="Close">✕</button>
   </div>
   <div id="chatLog" class="chat-log">
-    <div class="chat-msg bot">Ask me about today's feed, the leaderboard, or a specific stock — e.g. <em>"which stocks have the strongest buy consensus?"</em> or <em>"why is NVDA rated buy?"</em></div>
+    <div class="chat-msg bot chat-intro">
+      👋 I answer questions grounded in real data. I can help with:
+      <ul class="chat-can">
+        <li>📊 <strong>Analyst consensus</strong> — buy/hold/sell, price targets &amp; who's most accurate</li>
+        <li>🏢 <strong>Any stock's profile</strong> — fundamentals (P/E, market cap, sector) for any company, even ones we don't track</li>
+        <li>📰 <strong>Company news</strong> — "latest on Apple", "why is NVDA falling?" (live web)</li>
+        <li>◫ <strong>Funds</strong> — holdings, expense ratio, what's driving returns</li>
+      </ul>
+      <span class="chat-note">Analysis, not investment advice. I stick to stocks &amp; funds — I won't do general chat.</span>
+    </div>
   </div>
   <div class="chat-suggest" id="chatSuggest">
     <button type="button" data-q="Which stocks have the strongest buy consensus?">Strongest buys</button>
-    <button type="button" data-q="What are the best target hit rates so far?">Best hit rates</button>
-    <button type="button" data-q="Which stocks have the most analyst coverage?">Most covered</button>
+    <button type="button" data-q="What are the fundamentals of Apple?">Apple fundamentals</button>
+    <button type="button" data-q="What's the latest news on Tesla?">Tesla news</button>
+    <button type="button" data-q="Which analysts have the best target hit rates?">Best hit rates</button>
   </div>
   <form id="chatForm" class="chat-input">
     <input id="chatText" placeholder="Ask a question…" autocomplete="off" maxlength="500" />
@@ -177,6 +187,6 @@
   </form>
 </div>
 
-<script src="/app.js?v=28"></script>
+<script src="/app.js?v=32"></script>
 </body>
 </html>

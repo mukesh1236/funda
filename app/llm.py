@@ -336,7 +336,10 @@ def openrouter_generate_stream(prompt: str, settings: Settings, timeout: float =
                 },
             ) as resp:
                 if resp.status_code != 200:
-                    logger.warning("OpenRouter stream HTTP %s for %s", resp.status_code, model)
+                    last_gemini_error = f"OpenRouter stream HTTP {resp.status_code} for {model}"
+                    logger.warning(last_gemini_error)
+                    _record("openrouter", model, False, started,
+                            error=f"stream HTTP {resp.status_code}")
                     return
                 for line in resp.iter_lines():
                     if not line or not line.startswith("data:"):
@@ -365,6 +368,7 @@ def openrouter_generate_stream(prompt: str, settings: Settings, timeout: float =
         if text:
             last_gemini_error = None
     except Exception as e:
+        last_gemini_error = f"OpenRouter stream {type(e).__name__}: {e}"
         logger.warning("OpenRouter stream error: %s", e)
         _record("openrouter", model, False, started, error=type(e).__name__)
         return
