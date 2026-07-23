@@ -150,13 +150,32 @@ def _detect_untracked_symbol(question: str, market: str) -> Optional[str]:
     return hits[0]["symbol"] if hits else None
 
 
-def _fmt_overview(ov) -> str:
-    """Generic profile context for a stock outside the tracked universe —
-    same data the standalone stock-overview page shows."""
-    parts = [
-        f"UNTRACKED STOCK {ov.symbol} ({ov.company_name or ov.symbol}) — no analyst "
-        "recommendations tracked for this one, but general market data is available:"
-    ]
+# Fundamentals (P/E, revenue, market cap, margins…) live in the stock-overview,
+# NOT the analyst feed — so a "fundamentals of META" question needs the overview
+# pulled in even for a tracked stock. These signal such questions.
+_FUNDAMENTALS_SIGNALS = (
+    "fundamental", "valuation", "p/e", "pe ratio", "p / e", "market cap",
+    "marketcap", "revenue", "earnings", "eps", "profit", "margin", "financial",
+    "balance sheet", "cash flow", "debt", "dividend", "roe", "book value", "beta",
+)
+
+
+def _needs_fundamentals(question: str) -> bool:
+    return any(s in question.lower() for s in _FUNDAMENTALS_SIGNALS)
+
+
+def _fmt_overview(ov, supplement: bool = False) -> str:
+    """Generic profile context (price, sector, market cap, P/E, dividend, 12m
+    return) — the standalone stock-overview data. `supplement=True` when it's
+    appended to a tracked stock's analyst context (so the header doesn't wrongly
+    claim the stock is untracked)."""
+    if supplement:
+        parts = [f"FUNDAMENTALS for {ov.symbol} ({ov.company_name or ov.symbol}):"]
+    else:
+        parts = [
+            f"UNTRACKED STOCK {ov.symbol} ({ov.company_name or ov.symbol}) — no analyst "
+            "recommendations tracked for this one, but general market data is available:"
+        ]
     if ov.price is not None:
         parts.append(f"Current price: ${ov.price}")
     f = ov.fundamentals
@@ -602,6 +621,14 @@ def _build_main_prompt(store: RecommendationStore, settings: Settings, question:
             if ov:
                 detected = untracked
                 sym_ctx = _fmt_overview(ov)
+    elif sym_ctx and detected and _needs_fundamentals(question):
+        # Tracked stock, but the question wants fundamentals (P/E, revenue,
+        # market cap…) which the analyst feed doesn't carry — pull the overview
+        # in as a supplement so the answer isn't "no fundamentals in the data".
+        from app.service import build_stock_overview
+        ov = build_stock_overview(detected)
+        if ov:
+            sym_ctx = f"{sym_ctx}\n\n{_fmt_overview(ov, supplement=True)}"
     web_ctx = ""
     if _needs_web_context(question):
         web_query = f"{detected} {question}" if detected else question

@@ -162,7 +162,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+class SelectiveGZipMiddleware(GZipMiddleware):
+    """GZip everything EXCEPT the chat SSE stream. GZip buffers a response to
+    compress it, which defeats Server-Sent Events — the browser would sit on
+    'Thinking…' and then get the whole answer at once instead of token-by-token.
+    So the streaming route bypasses compression entirely."""
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http" and scope.get("path") == "/api/chat/stream":
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+
+app.add_middleware(SelectiveGZipMiddleware, minimum_size=1000)
 
 
 @app.middleware("http")
@@ -559,7 +573,16 @@ def chat_stream(req: ChatRequest):
             except Exception as e:
                 logger.debug("chat stream telemetry skipped: %s", e)
 
-    return StreamingResponse(_events(), media_type="text/event-stream")
+    return StreamingResponse(
+        _events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # Tell nginx / Railway's proxy not to buffer the stream, or tokens
+            # would pile up proxy-side and arrive all at once anyway.
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _run_daily_and_invalidate():

@@ -196,6 +196,44 @@ def test_untracked_stock_question_uses_overview_not_dataset_refusal(tmp_path):
     assert source == "llm"
 
 
+# ── fundamentals injection for tracked stocks ──────────────────────────────────
+
+def test_fundamentals_question_injects_overview_for_tracked_stock(tmp_path):
+    """A tracked stock (META) has analyst data but no fundamentals in the feed;
+    a 'fundamentals of Meta' question must pull the stock-overview in so the
+    answer isn't 'no fundamentals in the dataset'."""
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
+    ov = StockOverview(
+        symbol="META", company_name="Meta Platforms", price=822.0,
+        fundamentals=Fundamentals(sector="Communication Services",
+                                  market_cap=2_100_000_000_000, pe_ratio=28.5),
+    )
+    with patch("app.chat.generate_narrative", return_value="reasoned answer") as gen, \
+         patch("app.chat._detect_symbol", return_value="META"), \
+         patch("app.chat._fmt_symbol", return_value="FOCUS STOCK META: analyst data"), \
+         patch("app.service.build_stock_overview", return_value=ov):
+        answer, error, source = answer_question(
+            store, settings, "what are the fundamentals of Meta")
+    prompt = gen.call_args[0][0]
+    assert "FUNDAMENTALS for META" in prompt
+    assert "P/E: 28.5" in prompt
+    assert "analyst data" in prompt   # still keeps the analyst context too
+
+
+def test_non_fundamentals_question_skips_overview_fetch(tmp_path):
+    """A plain analyst question about a tracked stock must NOT pay for the
+    extra stock-overview fetch."""
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
+    with patch("app.chat.generate_narrative", return_value="reasoned answer"), \
+         patch("app.chat._detect_symbol", return_value="NVDA"), \
+         patch("app.chat._fmt_symbol", return_value="FOCUS STOCK NVDA"), \
+         patch("app.service.build_stock_overview") as ov:
+        answer_question(store, settings, "is NVDA a strong buy?")
+    assert not ov.called
+
+
 # ── streaming (website chat only) ──────────────────────────────────────────────
 
 def test_stream_yields_chunks_then_done_with_source_llm(tmp_path):
