@@ -1001,10 +1001,16 @@ $('#chatForm').addEventListener('submit', async (e) => {
   $('#chatScope').textContent = chatScopeLabel();
   const thinking = addChatMsg('Thinking…', 'bot pending');
   $('#chatSend').disabled = true;
-  // Hard client-side timeout: a hung request must never leave the chat
-  // stuck on "Thinking…" forever.
+  // Inactivity timeout: abort only if NO data arrives for this long. It resets
+  // on every streamed chunk, so a slow-but-progressing answer is never cut off
+  // (free LLM tiers can be slow) — only a genuinely hung request aborts.
+  const STALL_MS = 45000;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 90000);
+  let timer = setTimeout(() => ctrl.abort(), STALL_MS);
+  const resetStall = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => ctrl.abort(), STALL_MS);
+  };
   let gotText = false;
   let source = null;
   try {
@@ -1028,6 +1034,7 @@ $('#chatForm').addEventListener('submit', async (e) => {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
+      resetStall();   // data is flowing — keep the stream alive
       buf += decoder.decode(value, { stream: true });
       let sep;
       while ((sep = buf.indexOf('\n\n')) !== -1) {
@@ -1063,7 +1070,9 @@ $('#chatForm').addEventListener('submit', async (e) => {
     thinking.classList.remove('pending');
     thinking.classList.add('err');
     thinking.textContent = err.name === 'AbortError'
-      ? 'The AI took too long to answer. Please try again — if this keeps happening, check /api/health → llm.last_error.'
+      ? (gotText
+          ? 'The answer stopped mid-way — please try again.'
+          : 'The AI didn’t respond in time. Free AI tiers can be busy — please try again in a moment.')
       : (err.message || 'Could not reach the AI.');
   } finally {
     clearTimeout(timer);
