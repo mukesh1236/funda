@@ -820,7 +820,7 @@ document.querySelectorAll('.tab').forEach(t =>
   }));
 $('#days').addEventListener('change', () => { if (view === 'feed') loadFeed(); });
 $('#theme').addEventListener('change', () => { view = 'feed'; render(); });
-$('#market').addEventListener('change', () => { _chatSymbol = null; loadThemes(); view = 'feed'; render(); });
+$('#market').addEventListener('change', () => { _chatSymbol = null; loadThemes(); renderChatSuggest(); view = 'feed'; render(); });
 $('#refresh').addEventListener('click', async () => {
   $('#status').textContent = 'Triggering refresh…';
   try {
@@ -986,7 +986,7 @@ function toggleChat(open) {
   const show = open ?? panel.hidden;
   panel.hidden = !show;
   $('#chatFab').hidden = show;
-  if (show) { $('#chatScope').textContent = chatScopeLabel(); $('#chatText').focus(); }
+  if (show) { $('#chatScope').textContent = chatScopeLabel(); renderChatSuggest(); $('#chatText').focus(); }
 }
 
 $('#chatFab').addEventListener('click', () => toggleChat(true));
@@ -1704,14 +1704,40 @@ function _rememberSearch(sym, name) {
   });
 })();
 
-// ── Ask-AI suggestion chips ──────────────────────────────────────────────────
-(function initChatSuggest() {
+// ── Ask-AI suggestion chips (market-aware) ───────────────────────────────────
+// Example prompts follow the selected market so India users see Indian tickers
+// (Reliance, Infosys) instead of US ones (Apple, Tesla). The two neutral chips
+// (buy consensus, hit rates) work for either market.
+const CHAT_SUGGEST = {
+  us: [
+    ['Strongest buys', 'Which stocks have the strongest buy consensus?'],
+    ['Apple fundamentals', 'What are the fundamentals of Apple?'],
+    ['Tesla news', "What's the latest news on Tesla?"],
+    ['Best hit rates', 'Which analysts have the best target hit rates?'],
+  ],
+  in: [
+    ['Strongest buys', 'Which stocks have the strongest buy consensus?'],
+    ['Reliance fundamentals', 'What are the fundamentals of Reliance Industries?'],
+    ['Infosys news', "What's the latest news on Infosys?"],
+    ['Best hit rates', 'Which analysts have the best target hit rates?'],
+  ],
+};
+
+function renderChatSuggest() {
   const box = document.getElementById('chatSuggest');
   if (!box) return;
-  box.querySelectorAll('button').forEach((b) =>
+  const chips = CHAT_SUGGEST[currentMarket()] || CHAT_SUGGEST.us;
+  box.innerHTML = '';
+  chips.forEach(([label, q]) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.dataset.q = q;
     b.addEventListener('click', () => {
-      const input = document.getElementById('chatText');
-      input.value = b.dataset.q;
+      document.getElementById('chatText').value = q;
       document.getElementById('chatForm').requestSubmit();
-    }));
-})();
+    });
+    box.appendChild(b);
+  });
+}
+renderChatSuggest();
