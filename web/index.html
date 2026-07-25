@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=34" />
+  <link rel="stylesheet" href="/styles.css?v=35" />
 </head>
 <body>
 <div class="app-shell">
@@ -161,7 +161,11 @@
 <div id="chatPanel" class="chat-panel" hidden>
   <div class="chat-head">
     <span>✦ Ask AI <small id="chatScope"></small></span>
-    <button id="chatClose" class="chat-x" aria-label="Close">✕</button>
+    <div class="chat-head-btns">
+      <button id="chatMin" class="chat-x" title="Minimize" aria-label="Minimize">—</button>
+      <button id="chatMax" class="chat-x" title="Maximize" aria-label="Maximize">⤢</button>
+      <button id="chatClose" class="chat-x" title="Close" aria-label="Close">✕</button>
+    </div>
   </div>
   <div id="chatLog" class="chat-log">
     <div class="chat-msg bot chat-intro">
@@ -187,6 +191,6 @@
   </form>
 </div>
 
-<script src="/app.js?v=34"></script>
+<script src="/app.js?v=35"></script>
 </body>
 </html>

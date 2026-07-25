@@ -168,6 +168,21 @@ def test_explicit_uppercase_ticker_trusted_without_a_search_call():
     assert not search.called
 
 
+def test_fundamentals_news_words_stripped_from_symbol_search():
+    """'fundamentals of Reliance' / 'latest news on Infosys' must search for
+    the company name only, not the noise words — otherwise the ticker fails to
+    resolve (hit especially for India, whose analyst feed is sparse)."""
+    with patch("app.sources.search.search_tickers",
+               return_value=[{"symbol": "RELIANCE.NS", "name": "Reliance", "exchange": "NSE"}]) as s:
+        _detect_untracked_symbol("what are the fundamentals of reliance industries", "in")
+    assert s.call_args[0][0] == "reliance industries"
+
+    with patch("app.sources.search.search_tickers",
+               return_value=[{"symbol": "INFY.NS", "name": "Infosys", "exchange": "NSE"}]) as s:
+        _detect_untracked_symbol("latest news on infosys", "in")
+    assert s.call_args[0][0] == "infosys"
+
+
 def test_untracked_symbol_none_when_search_finds_nothing():
     with patch("app.sources.search.search_tickers", return_value=[]):
         result = _detect_untracked_symbol("asdkjhaskjdh", "us")

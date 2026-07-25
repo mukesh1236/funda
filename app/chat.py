@@ -173,6 +173,13 @@ _QUESTION_STOPWORDS = frozenset({
     "rating", "does", "do", "did", "and", "or", "to", "with", "you", "your",
     "market", "cap", "capitalization", "value", "worth", "current", "much",
     "many", "give", "show", "get", "know", "s",
+    # fundamentals / news words: without these, "fundamentals of Reliance" or
+    # "latest news on Infosys" search for the noise words too and fail to
+    # resolve the ticker (hit especially for India, whose feed is sparser).
+    "fundamental", "fundamentals", "valuation", "financial", "financials",
+    "revenue", "earnings", "profit", "margin", "dividend", "news", "latest",
+    "recent", "update", "updates", "headline", "headlines", "performance",
+    "return", "returns", "sector", "pe", "ratio",
 })
 
 
