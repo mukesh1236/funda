@@ -467,7 +467,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
-    source: str = "llm"   # llm | fund-data | rule | overview | out-of-scope — which layer answered
+    source: str = "llm"   # llm | fund-data | rule | overview | out-of-scope | advice-declined
 
 
 # ── Generic stock overview (any ticker, tracked or not) ──────────────────────

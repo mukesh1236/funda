@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from app.chat import (
     _LLM_PROVIDERS, _detect_fund_ticker, _detect_untracked_symbol, _in_scope,
-    answer_question, answer_question_stream,
+    _is_personal_advice, answer_question, answer_question_stream,
 )
 from app.config import Settings
 from app.models import (
@@ -258,6 +258,47 @@ def test_news_question_injects_company_news_and_web_for_tracked_stock(tmp_path):
     assert "Nvidia unveils new chip" in prompt       # company news from overview
     assert "LIVE WEB RESULTS" in prompt              # live web too
     assert "strong guidance" in prompt
+
+
+# ── personal buy/sell advice guardrail ─────────────────────────────────────────
+
+def test_personal_advice_is_detected():
+    assert _is_personal_advice("should I buy NVDA?")
+    assert _is_personal_advice("suggest me a stock to buy")
+    assert _is_personal_advice("is AAPL a good buy right now?")
+    assert _is_personal_advice("what should I invest in?")
+    assert _is_personal_advice("which stock to buy this week")
+
+
+def test_informational_buy_questions_are_not_advice():
+    """Asking to SEE analyst buy ratings is the app's whole purpose — must not
+    be mistaken for a personal buy suggestion."""
+    assert not _is_personal_advice("which stocks have the strongest buy consensus?")
+    assert not _is_personal_advice("show me the most buy-rated stocks")
+    assert not _is_personal_advice("how many analysts rate NVDA a buy?")
+
+
+def test_advice_question_declines_without_calling_llm(tmp_path):
+    """A 'should I buy' question must return the disclaimer, never reach the
+    LLM, and (when a stock is named) still show the analyst consensus."""
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
+    with patch("app.chat.generate_narrative", return_value="should not happen") as gen:
+        answer, error, source = answer_question(store, settings, "should I buy NVDA?")
+    assert not gen.called
+    assert source == "advice-declined"
+    assert error is None
+    assert "not investment advice" in answer.lower() or "educational" in answer.lower()
+    assert "NVDA" in answer   # still shows the analyst consensus for the named stock
+
+
+def test_advice_question_streams_as_decline_not_llm(tmp_path):
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
+    with patch("app.llm.generate_narrative_stream") as stream_fn:
+        events = list(answer_question_stream(store, settings, "should I buy NVDA?"))
+    assert not stream_fn.called
+    assert events[-1] == {"done": True, "source": "advice-declined"}
 
 
 # ── streaming (website chat only) ──────────────────────────────────────────────

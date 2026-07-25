@@ -714,8 +714,11 @@ class RecommendationStore:
             ).fetchall()
         by_source = {r["source"]: r["n"] for r in rows}
         total = sum(by_source.values())
-        eligible = total - by_source.get("out-of-scope", 0)
-        non_llm = sum(n for s, n in by_source.items() if s not in ("llm", "out-of-scope"))
+        # out-of-scope + advice-declined are intentional guardrail responses,
+        # NOT AI failures — exclude them so they don't inflate the fallback SLO.
+        _excluded = ("llm", "out-of-scope", "advice-declined")
+        eligible = total - by_source.get("out-of-scope", 0) - by_source.get("advice-declined", 0)
+        non_llm = sum(n for s, n in by_source.items() if s not in _excluded)
         return {
             "total": total,
             "by_source": by_source,

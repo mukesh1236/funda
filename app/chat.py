@@ -86,6 +86,58 @@ def _web_context(query: str, settings: Settings) -> str:
     return "\n".join(lines)
 
 
+# ── personal buy/sell advice guardrail ────────────────────────────────────────
+# AlphaFunds SHOWS analyst recommendations; it must not give personal "should I
+# buy?" advice — it's an educational tool, not an advisor. These phrasings ask
+# for a personal call (vs. informational "which stocks have the strongest BUY
+# consensus?", which is exactly what the app is for and must still be answered).
+_ADVICE_SIGNALS = (
+    "should i buy", "should i sell", "should i invest", "should i hold",
+    "should i get", "should i put money", "shall i buy", "shall i invest",
+    "can i buy", "would you buy", "will you buy", "do you recommend i",
+    "do you recommend buying", "recommend me", "suggest me", "suggest a stock",
+    "suggest stocks", "suggest some stock", "what should i buy",
+    "what should i invest", "what to buy", "which stock should i buy",
+    "which should i buy", "is it a good time to buy", "good time to buy",
+    "is it worth buying", "worth buying", "worth investing", "good buy",
+    "is it a good investment", "good investment", "is it a buy", "advise me",
+    "give me advice", "tell me to buy", "stock to buy", "stocks to buy",
+    "which stock to buy", "best stock to buy",
+)
+
+
+def _is_personal_advice(question: str) -> bool:
+    return any(s in question.lower() for s in _ADVICE_SIGNALS)
+
+
+_ADVICE_DISCLAIMER = (
+    "📌 AlphaFunds is a tool to see analyst buy / hold / sell recommendations in "
+    "one place — I don't give personal buy or sell suggestions, and nothing here "
+    "is investment advice (this is for study / educational purposes only). "
+    "The decision is always yours."
+)
+
+
+def _advice_response(store: RecommendationStore, question: str, market: str,
+                     symbol: Optional[str]) -> str:
+    """The disclaimer for personal buy/sell-advice questions — plus, if a stock
+    is named, the analyst consensus for it (that's what the app is FOR: show the
+    data, let the user decide). Deterministic, no LLM."""
+    detected = symbol or _detect_fund_ticker(question)
+    if not detected:
+        try:
+            feed = build_feed(store, days=30, market=market)
+            detected = _detect_symbol(question, feed.stocks)
+        except Exception as e:
+            logger.debug("advice symbol detect skipped: %s", e)
+    msg = _ADVICE_DISCLAIMER
+    if detected:
+        ctx = _stock_answer(store, detected, [])
+        if ctx and "don't have analyst data" not in ctx:
+            msg += f"\n\nHere's what analysts currently say about {detected} — you decide:\n{ctx}"
+    return msg
+
+
 # ── shared formatting ─────────────────────────────────────────────────────────
 def _line(s) -> str:
     tgt = f", avg target ${s.avg_target}" if s.avg_target else ""
@@ -560,8 +612,9 @@ def answer_question(
     is off or unreachable — never the first choice. (It used to be the other
     way around, which made the bot parrot dashboard lists.)
 
-    source ∈ {"llm", "fund-data", "rule", "overview", "out-of-scope"} — surfaced
-    in the UI so a fallback (or refusal) answer is visibly not a reasoned one.
+    source ∈ {"llm", "fund-data", "rule", "overview", "out-of-scope",
+    "advice-declined"} — surfaced in the UI so a fallback/refusal answer is
+    visibly not a reasoned one.
     """
     llm_on = settings.summary_provider in _LLM_PROVIDERS
 
@@ -570,6 +623,12 @@ def answer_question(
     # a prompt injection to reach a model call in the first place.
     if not _in_scope(question):
         return _OUT_OF_SCOPE_REPLY, None, "out-of-scope"
+
+    # Personal buy/sell advice → decline with the disclaimer (educational tool,
+    # not an advisor), but still show the analyst consensus for any named stock.
+    # Never reaches the LLM, so the model can't be coaxed into a recommendation.
+    if _is_personal_advice(question):
+        return _advice_response(store, question, market, symbol), None, "advice-declined"
 
     # 0) Fund-specific question — inject live fund data + RAG context. Checked
     # before build_feed (below) since this path resolves on its own and never
@@ -692,7 +751,8 @@ def answer_question_stream(
     yield it as a single chunk. This keeps one streaming protocol for the
     frontend without duplicating the guardrail/fund/fallback logic."""
     llm_on = settings.summary_provider in _LLM_PROVIDERS
-    if _in_scope(question) and llm_on and not _detect_fund_ticker(question):
+    if (_in_scope(question) and llm_on and not _detect_fund_ticker(question)
+            and not _is_personal_advice(question)):
         feed = build_feed(store, days=30, market=market)
         prompt = _build_main_prompt(store, settings, question, market, symbol, feed)
 

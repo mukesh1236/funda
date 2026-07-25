@@ -1063,6 +1063,7 @@ $('#chatForm').addEventListener('submit', async (e) => {
       tag.textContent = source === 'rule' ? '⚡ quick data answer (AI unavailable)'
         : source === 'fund-data' ? '⚡ fund data (AI unavailable)'
         : source === 'out-of-scope' ? '🛈 outside AlphaFunds’ scope'
+        : source === 'advice-declined' ? '🎓 educational — not investment advice'
         : 'ℹ data overview';
       thinking.appendChild(tag);
     }
@@ -1537,7 +1538,8 @@ async function loadSRE() {
           ${srcRow('⚡ Rule fallback', bySrc.rule || 0, 'warn')}
           ${srcRow('ℹ Overview fallback', bySrc.overview || 0, 'warn')}
           ${srcRow('📊 Fund data', bySrc['fund-data'] || 0, '')}
-          ${srcRow('🛈 Out of scope (guardrail)', bySrc['out-of-scope'] || 0, '')}`
+          ${srcRow('🛈 Out of scope (guardrail)', bySrc['out-of-scope'] || 0, '')}
+          ${srcRow('🎓 Advice declined', bySrc['advice-declined'] || 0, '')}`
           : '<p class="empty">No chat answers recorded yet — ask the AI something.</p>'}
       </div>
 
