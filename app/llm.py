@@ -303,17 +303,22 @@ def openrouter_generate(prompt: str, settings: Settings, timeout: float = 30) ->
 
 
 def openrouter_generate_stream(prompt: str, settings: Settings, timeout: float = 30):
-    """Yields text chunks as OpenRouter streams the CONFIGURED model
-    token-by-token. Yields nothing at all on any failure (no key, non-200,
-    network error) — the caller should fall back to openrouter_generate()'s
-    full multi-model retry chain in that case, same as if this were never
-    called. Only the single configured model is tried here; streaming
-    doesn't mix with mid-stream fallback (can't retry after already sending
-    partial output to the client), so robustness lives in the sync fallback."""
+    """Yields text chunks as OpenRouter streams a single model token-by-token.
+    The model is resolved to a live one via the catalog (the configured slug may
+    be retired), but only ONE model is tried — streaming can't retry mid-stream
+    after already sending partial output. Yields nothing on any failure (no key,
+    non-200, network error); the caller then falls back to openrouter_generate()'s
+    full multi-model retry chain, so robustness lives in that sync fallback."""
     global last_gemini_error
     if not settings.openrouter_api_key:
         return
-    model = settings.openrouter_model
+    # Resolve to a model that's actually live — the configured slug may be
+    # retired (e.g. a ':free' model that now 404s). _openrouter_candidates
+    # filters against OpenRouter's live catalog, so [0] is the best valid pick.
+    # (Without this, a dead configured slug makes EVERY stream 404 and the chat
+    # falls back to rule answers on every question.)
+    candidates = _openrouter_candidates(settings)
+    model = candidates[0] if candidates else settings.openrouter_model
     started = time.perf_counter()
     chunks: List[str] = []
     prompt_tokens = completion_tokens = None

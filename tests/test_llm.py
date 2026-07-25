@@ -111,7 +111,8 @@ def test_openrouter_stream_yields_chunks_in_order():
         'data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":5,"completion_tokens":2}}',
         "data: [DONE]",
     ]
-    with patch("app.llm.httpx.Client", return_value=_stream_client(200, lines)):
+    with patch("app.llm._openrouter_candidates", return_value=["m1:free"]), \
+         patch("app.llm.httpx.Client", return_value=_stream_client(200, lines)):
         chunks = list(llm.openrouter_generate_stream("hello", settings))
     assert chunks == ["Hello", " world"]
     assert llm.last_gemini_error is None
@@ -119,9 +120,25 @@ def test_openrouter_stream_yields_chunks_in_order():
 
 def test_openrouter_stream_yields_nothing_on_non_200():
     settings = Settings(openrouter_api_key="k", openrouter_model="m1:free")
-    with patch("app.llm.httpx.Client", return_value=_stream_client(429, [])):
+    with patch("app.llm._openrouter_candidates", return_value=["m1:free"]), \
+         patch("app.llm.httpx.Client", return_value=_stream_client(429, [])):
         chunks = list(llm.openrouter_generate_stream("hello", settings))
     assert chunks == []
+
+
+def test_openrouter_stream_uses_a_live_model_not_the_dead_configured_slug():
+    """Regression: the configured ':free' slug can be retired (404s). Streaming
+    must resolve a live model via the catalog, not blindly use the dead slug —
+    otherwise every question 404s and the chat looks permanently 'AI unavailable'."""
+    settings = Settings(openrouter_api_key="k", openrouter_model="dead/model:free")
+    client = _stream_client(200, ['data: {"choices":[{"delta":{"content":"hi"}}]}', "data: [DONE]"])
+    with patch("app.llm._openrouter_candidates", return_value=["live/model:free"]), \
+         patch("app.llm.httpx.Client", return_value=client):
+        chunks = list(llm.openrouter_generate_stream("hello", settings))
+    assert chunks == ["hi"]
+    # the request body must carry the live model, not the dead configured one
+    _, kwargs = client.stream.call_args
+    assert kwargs["json"]["model"] == "live/model:free"
 
 
 def test_openrouter_stream_no_key_short_circuits():

@@ -271,23 +271,35 @@ def test_stream_yields_chunks_then_done_with_source_llm(tmp_path):
     assert events == [{"delta": "Hello"}, {"delta": " world"}, {"done": True, "source": "llm"}]
 
 
-def test_stream_llm_failure_serves_grounded_fallback_without_retrying_llm(tmp_path):
-    """When streaming yields nothing (LLM down/timed out), the client must get
-    a graceful grounded data answer + a 'try again' note — and the LLM must NOT
-    be re-attempted (that would just stall again). The user never sees an error;
-    the failure is for the admin logs."""
+def test_stream_recovers_via_nonstreaming_llm_when_streaming_yields_nothing(tmp_path):
+    """If streaming fails (e.g. a dead model slug) but the non-streaming LLM
+    still works (its catalog fallback finds a live model), the user must still
+    get a real LLM answer — NOT a 'AI unavailable' rule answer. This is the
+    regression behind 'every answer shows AI unavailable'."""
     store = _make_store(tmp_path, seed=True)
     settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
     with patch("app.llm.generate_narrative_stream", return_value=iter([])), \
-         patch("app.chat.answer_question") as aq:   # must NOT be called
+         patch("app.chat.generate_narrative", return_value="recovered LLM answer") as sync:
         events = list(answer_question_stream(
             store, settings, "which stocks have the strongest buy consensus?"))
-    assert not aq.called
+    assert sync.called
+    assert events == [{"delta": "recovered LLM answer"}, {"done": True, "source": "llm"}]
+
+
+def test_stream_grounded_fallback_only_when_llm_truly_down(tmp_path):
+    """When BOTH streaming and the non-streaming LLM fail, the user gets a
+    graceful grounded data answer + 'try again' note (never a raw error)."""
+    store = _make_store(tmp_path, seed=True)
+    settings = Settings(summary_provider="openrouter", openrouter_api_key="test-key")
+    with patch("app.llm.generate_narrative_stream", return_value=iter([])), \
+         patch("app.chat.generate_narrative", return_value=None):
+        events = list(answer_question_stream(
+            store, settings, "which stocks have the strongest buy consensus?"))
     assert events[-1]["done"] is True
     assert events[-1]["source"] in ("rule", "overview")
     body = events[0]["delta"]
-    assert "try again" in body.lower()             # friendly retry note
-    assert "NVDA" in body or "strongest" in body.lower()   # real grounded data
+    assert "try again" in body.lower()
+    assert "NVDA" in body or "strongest" in body.lower()
 
 
 def test_stream_llm_exception_mid_flight_is_caught_and_degrades(tmp_path):
