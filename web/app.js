@@ -820,7 +820,7 @@ document.querySelectorAll('.tab').forEach(t =>
   }));
 $('#days').addEventListener('change', () => { if (view === 'feed') loadFeed(); });
 $('#theme').addEventListener('change', () => { view = 'feed'; render(); });
-$('#market').addEventListener('change', () => { _chatSymbol = null; loadThemes(); view = 'feed'; render(); });
+$('#market').addEventListener('change', () => { _chatSymbol = null; loadThemes(); renderChatSuggest(); view = 'feed'; render(); });
 $('#refresh').addEventListener('click', async () => {
   $('#status').textContent = 'Triggering refresh…';
   try {
@@ -986,11 +986,36 @@ function toggleChat(open) {
   const show = open ?? panel.hidden;
   panel.hidden = !show;
   $('#chatFab').hidden = show;
-  if (show) { $('#chatScope').textContent = chatScopeLabel(); $('#chatText').focus(); }
+  if (show) {
+    panel.classList.remove('chat-min');   // always open expanded
+    $('#chatScope').textContent = chatScopeLabel();
+    renderChatSuggest();
+    $('#chatText').focus();
+  }
 }
 
 $('#chatFab').addEventListener('click', () => toggleChat(true));
 $('#chatClose').addEventListener('click', () => toggleChat(false));
+
+// Minimize → collapse to just the header bar; click the header (or —) to restore.
+$('#chatMin').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $('#chatPanel').classList.toggle('chat-min');
+});
+$('.chat-head').addEventListener('click', (e) => {
+  // clicking the collapsed header restores it (ignore clicks on the buttons)
+  if (e.target.closest('.chat-head-btns')) return;
+  $('#chatPanel').classList.remove('chat-min');
+});
+// Maximize ⤢ ↔ restore ⤡ — toggle a roomier panel size.
+$('#chatMax').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const panel = $('#chatPanel');
+  panel.classList.remove('chat-min');
+  const max = panel.classList.toggle('chat-max');
+  e.currentTarget.textContent = max ? '⤡' : '⤢';
+  e.currentTarget.title = max ? 'Restore' : 'Maximize';
+});
 $('#chatForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const input = $('#chatText');
@@ -1063,6 +1088,7 @@ $('#chatForm').addEventListener('submit', async (e) => {
       tag.textContent = source === 'rule' ? '⚡ quick data answer (AI unavailable)'
         : source === 'fund-data' ? '⚡ fund data (AI unavailable)'
         : source === 'out-of-scope' ? '🛈 outside AlphaFunds’ scope'
+        : source === 'advice-declined' ? '🎓 educational — not investment advice'
         : 'ℹ data overview';
       thinking.appendChild(tag);
     }
@@ -1537,7 +1563,8 @@ async function loadSRE() {
           ${srcRow('⚡ Rule fallback', bySrc.rule || 0, 'warn')}
           ${srcRow('ℹ Overview fallback', bySrc.overview || 0, 'warn')}
           ${srcRow('📊 Fund data', bySrc['fund-data'] || 0, '')}
-          ${srcRow('🛈 Out of scope (guardrail)', bySrc['out-of-scope'] || 0, '')}`
+          ${srcRow('🛈 Out of scope (guardrail)', bySrc['out-of-scope'] || 0, '')}
+          ${srcRow('🎓 Advice declined', bySrc['advice-declined'] || 0, '')}`
           : '<p class="empty">No chat answers recorded yet — ask the AI something.</p>'}
       </div>
 
@@ -1702,14 +1729,57 @@ function _rememberSearch(sym, name) {
   });
 })();
 
-// ── Ask-AI suggestion chips ──────────────────────────────────────────────────
-(function initChatSuggest() {
+// ── Ask-AI suggestion chips (market-aware + randomized) ──────────────────────
+// Example prompts follow the selected market (India users see Reliance/Infosys,
+// not Apple/Tesla) and a fresh random 4 are drawn each time the chat opens, so
+// the site feels alive rather than static.
+const CHAT_SUGGEST = {
+  us: [
+    ['Strongest buys', 'Which stocks have the strongest buy consensus?'],
+    ['Apple fundamentals', 'What are the fundamentals of Apple?'],
+    ['Tesla news', "What's the latest news on Tesla?"],
+    ['Best hit rates', 'Which analysts have the best target hit rates?'],
+    ['Most covered', 'Which stocks have the most analyst coverage?'],
+    ['Highest upside', 'Which stocks have the highest upside to their target?'],
+    ['NVIDIA view', "How's NVDA rated and why?"],
+    ['Microsoft news', "What's the latest news on Microsoft?"],
+    ['Most bearish', 'Which stocks are the most sell-rated right now?'],
+    ['Amazon fundamentals', 'What are the fundamentals of Amazon?'],
+  ],
+  in: [
+    ['Strongest buys', 'Which stocks have the strongest buy consensus?'],
+    ['Reliance fundamentals', 'What are the fundamentals of Reliance Industries?'],
+    ['Infosys news', "What's the latest news on Infosys?"],
+    ['Best hit rates', 'Which analysts have the best target hit rates?'],
+    ['Most covered', 'Which stocks have the most analyst coverage?'],
+    ['TCS view', "How's TCS rated and why?"],
+    ['HDFC Bank news', "What's the latest news on HDFC Bank?"],
+    ['Highest upside', 'Which stocks have the highest upside to their target?'],
+    ['Most bearish', 'Which stocks are the most sell-rated right now?'],
+    ['Tata Motors fundamentals', 'What are the fundamentals of Tata Motors?'],
+  ],
+};
+
+function renderChatSuggest() {
   const box = document.getElementById('chatSuggest');
   if (!box) return;
-  box.querySelectorAll('button').forEach((b) =>
+  const pool = (CHAT_SUGGEST[currentMarket()] || CHAT_SUGGEST.us).slice();
+  // Fisher–Yates shuffle, then take 4 — a fresh mix every time the chat opens.
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  box.innerHTML = '';
+  pool.slice(0, 4).forEach(([label, q]) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.dataset.q = q;
     b.addEventListener('click', () => {
-      const input = document.getElementById('chatText');
-      input.value = b.dataset.q;
+      document.getElementById('chatText').value = q;
       document.getElementById('chatForm').requestSubmit();
-    }));
-})();
+    });
+    box.appendChild(b);
+  });
+}
+renderChatSuggest();
