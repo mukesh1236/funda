@@ -216,3 +216,73 @@ class TestBackgroundBuild:
         status = store.get_factsheet_status("HDFCX")
         assert status["state"] == "unavailable"
         assert "SEC" in status["detail"] or "factsheet" in status["detail"].lower()
+
+
+class TestReviewRegressions:
+
+    def test_malformed_cached_blob_does_not_500(self, client):
+        """The UI polls this every 12s; a legacy or truncated row must trigger
+        a rebuild, not an error response."""
+        st = funds_mod._store
+        st.save_factsheet("BADX", "acc-1", '{"summary": {"headline": 123, "sections": "nope"}}',
+                          "m", 1)
+        st.set_factsheet_status("BADX", "ready", "", doc_key="acc-1")
+        with patch.object(funds_mod, "_factsheet_bg"):
+            r = client.get("/api/funds/BADX/factsheet")
+        assert r.status_code == 200
+        assert r.json()["status"] != "ready"
+
+    def test_stale_schema_version_is_not_served(self, client):
+        """Bumping the summary schema must retire old rows, or a stale shape
+        is served as 'ready' forever and never regenerates."""
+        from app.factsheet import SUMMARY_SCHEMA_VERSION
+
+        st = funds_mod._store
+        st.save_factsheet("OLDX", "acc-1", json.dumps({"summary": {"headline": "old"}}),
+                          "m", SUMMARY_SCHEMA_VERSION - 1)
+        st.set_factsheet_status("OLDX", "ready", "", doc_key="acc-1")
+        with patch.object(funds_mod, "_factsheet_bg"):
+            r = client.get("/api/funds/OLDX/factsheet")
+        assert r.json()["status"] != "ready"
+
+    def test_unavailable_expires_so_a_transient_outage_recovers(self, client):
+        """'unavailable' covers an EDGAR 503 as well as a real mismatch. Sticky
+        forever would let one outage disable a fund for every user."""
+        from datetime import datetime, timedelta, timezone
+
+        st = funds_mod._store
+        st.set_factsheet_status("TMPX", "unavailable", "EDGAR was down")
+        old = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat(timespec="seconds")
+        with st._connect() as conn:
+            conn.execute("UPDATE fund_factsheet_status SET updated_at = ? WHERE symbol = ?",
+                         (old, "TMPX"))
+        with patch.object(funds_mod, "_factsheet_bg") as bg:
+            r = client.get("/api/funds/TMPX/factsheet")
+        assert r.json()["status"] != "unavailable"
+        assert bg.call_count == 1, "a stale failure should be retried"
+
+    def test_recent_unavailable_is_still_honoured(self, client):
+        st = funds_mod._store
+        st.set_factsheet_status("FRSHX", "unavailable", "Could not be matched.")
+        with patch.object(funds_mod, "_factsheet_bg") as bg:
+            r = client.get("/api/funds/FRSHX/factsheet")
+        assert r.json()["status"] == "unavailable"
+        bg.assert_not_called()
+
+    def test_dropped_refresh_does_not_burn_the_hourly_quota(self, client):
+        """A refresh rejected because a build is already running shouldn't cost
+        the user their one refresh per hour."""
+        email = f"fs-{uuid.uuid4().hex[:12]}@example.com"
+        client.post("/api/auth/register", json={"email": email, "password": "password123"})
+
+        funds_mod._FS_PENDING.add("BUSYX")     # pretend a build is in flight
+        try:
+            with patch.object(funds_mod, "_factsheet_bg"):
+                dropped = client.post("/api/funds/BUSYX/factsheet/refresh")
+            assert dropped.status_code == 202
+        finally:
+            funds_mod._FS_PENDING.discard("BUSYX")
+
+        with patch.object(funds_mod, "_factsheet_bg"):
+            real = client.post("/api/funds/BUSYX/factsheet/refresh")
+        assert real.status_code == 202, "the quota should not have been spent"

@@ -552,16 +552,16 @@ def _detect_fund_ticker(question: str) -> Optional[str]:
     return None
 
 
-def _factsheet_context(symbol: str) -> str:
+def _factsheet_context(store: RecommendationStore, symbol: str) -> str:
     """Headline + risk bullets from an already-generated fact sheet, if there
     is one. Free — it was written and cached when the user opened the fact
     sheet, so this costs nothing extra and adds the qualitative risk framing
     the structured numbers can't supply."""
     import json
 
-    from app.main import store as _main_store
+    from app.factsheet import SUMMARY_SCHEMA_VERSION
 
-    row = _main_store.latest_factsheet(symbol)
+    row = store.latest_factsheet(symbol, SUMMARY_SCHEMA_VERSION)
     if not row:
         return ""
     blob = json.loads(row["summary_json"])
@@ -690,7 +690,7 @@ def answer_question(
             # A cached fact sheet is already generated and paid for; its risk
             # bullets are the part a chat answer most often lacks.
             try:
-                fund_context += _factsheet_context(fund_sym)
+                fund_context += _factsheet_context(store, fund_sym)
             except Exception as e:
                 logger.debug("factsheet context skipped: %s", e)
 

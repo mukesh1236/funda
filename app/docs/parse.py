@@ -32,6 +32,11 @@ _HEADING_PATTERNS: List[Tuple[str, "re.Pattern"]] = [
     ("risks",         re.compile(r"^\s*risks?\s*(of\s+investing)?\s*$", re.I)),
     ("performance",   re.compile(r"(past\s+performance|average\s+annual\s+total\s+returns"
                                  r"|annual\s+total\s+returns?)", re.I)),
+    # Commentary must precede the generic `management` pattern, or
+    # "Management's Discussion of Fund Performance" is misfiled as management.
+    ("commentary",    re.compile(r"(management'?s?\s+discussion"
+                                 r"|discussion\s+of\s+fund\s+performance"
+                                 r"|letter\s+to\s+shareholders)", re.I)),
     ("management",    re.compile(r"(investment\s+adviser|portfolio\s+manager|management\b)", re.I)),
     ("purchase_sale", re.compile(r"(purchase\s+and\s+sale\s+of\s+fund\s+shares"
                                  r"|buying\s+and\s+selling\s+shares|minimum\s+investment)", re.I)),
@@ -39,8 +44,6 @@ _HEADING_PATTERNS: List[Tuple[str, "re.Pattern"]] = [
     # Anchored: "Distributions" as a heading, not the word inside a sentence.
     ("distributions", re.compile(r"^\s*(dividends?[, ]+(and\s+)?capital\s+gains"
                                  r"|distributions?)\b", re.I)),
-    ("commentary",    re.compile(r"(management'?s?\s+discussion|discussion\s+of\s+fund\s+performance"
-                                 r"|letter\s+to\s+shareholders)", re.I)),
 ]
 
 # A heading is short. Anything longer is prose that merely mentions the words.
@@ -137,17 +140,37 @@ def find_sections(text: str) -> List[Section]:
     return sections
 
 
+def _sections_from_structural(text: str, html: str) -> List[Section]:
+    """Locate headings via the DOM, then find them in the flattened text.
+
+    Second pass, used only when the line scan found nothing: some filings wrap
+    a heading in markup that puts it on the same text line as neighbouring
+    content, so it never appears as a line of its own.
+    """
+    hits = []
+    for key, heading in _structural_headings(html):
+        idx = text.find(heading)
+        if idx >= 0 and all(idx != h[0] for h in hits):
+            hits.append((idx, key, heading))
+    hits.sort()
+
+    sections = []
+    for i, (start, key, heading) in enumerate(hits):
+        end = hits[i + 1][0] if i + 1 < len(hits) else len(text)
+        if end > start:
+            sections.append(Section(key=key, heading=heading, start=start, end=end))
+    return sections
+
+
 def parse_html(html: str) -> Tuple[str, List[Section]]:
     """(plain_text, sections). Sections may be empty for an unparseable filing."""
     text = html_to_text(html)
     sections = find_sections(text)
     if not sections:
-        # Fall back to the DOM: some filings put headings in tags whose text
-        # the flattening step merged into a neighbouring run.
-        structural = _structural_headings(html)
-        if structural:
-            logger.debug("parse_html: text scan found nothing, %d structural headings",
-                         len(structural))
+        sections = _sections_from_structural(text, html)
+        if sections:
+            logger.debug("parse_html: line scan found nothing, recovered %d "
+                         "sections from the DOM", len(sections))
     return text, sections
 
 

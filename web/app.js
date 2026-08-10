@@ -1280,6 +1280,9 @@ async function _loadFactsheet(sym, attempt) {
     if (attempt >= _FS_MAX_POLLS) {
       panel.innerHTML = `<div class="empty">Still working on this one —
         close and reopen the fact sheet in a minute.</div>`;
+      // Clear the fetch-once flag, or reopening does nothing and the advice
+      // above is a dead end.
+      delete panel.dataset.loaded;
       return;
     }
     panel.innerHTML = `<div class="loading">${esc(_FS_PROGRESS[d.status] || 'Working…')}</div>`;
@@ -1809,21 +1812,21 @@ function _rememberSearch(sym, name, type) {
   try { localStorage.setItem(_RECENT_KEY, JSON.stringify(list.slice(0, 8))); } catch (e) {}
 }
 
-// Mutual funds and ETFs belong in the Funds tab, where the fact sheet lives.
-// Everything else goes to the stock detail view.
+// A mutual fund has no meaningful stock detail page, so it always goes to the
+// Funds tab. An ETF trades like a stock and has a perfectly good overview, so
+// it only goes to Funds when the user actually tracks it — otherwise routing it
+// there would dead-end on a status line instead of showing anything.
 function openSearchResult(sym, type) {
-  if (type === 'fund' || type === 'etf') {
-    openFundSymbol(sym);
-    return;
-  }
+  if (type === 'fund') { openFundSymbol(sym, true); return; }
+  if (type === 'etf')  { openFundSymbol(sym, false); return; }
   openSymbol(sym);
 }
 
-async function openFundSymbol(sym) {
+async function openFundSymbol(sym, fallbackToAddBox) {
   view = 'funds';
   document.querySelectorAll('.tab').forEach(t =>
     t.classList.toggle('active', t.dataset.view === 'funds'));
-  try { await loadFunds(); } catch (e) { /* handled below by the missing-card path */ }
+  try { await loadFunds(); } catch (e) { /* handled by the missing-card path below */ }
 
   const card = document.getElementById('fc-' + sym);
   if (card) {
@@ -1831,8 +1834,12 @@ async function openFundSymbol(sym) {
     _toggleFactsheet(sym);
     return;
   }
-  // Not in the user's portfolio: prefill the add box rather than silently
-  // doing nothing, since the fact sheet lives on the fund card.
+  if (!fallbackToAddBox) {
+    openSymbol(sym);   // tradeable and untracked — the stock view still helps
+    return;
+  }
+  // Not tracked: prefill the add box rather than silently doing nothing, since
+  // the fact sheet lives on the fund card.
   const st = document.getElementById('status');
   if (st) st.textContent = `Add ${sym} to your funds to see its fact sheet.`;
   const input = document.getElementById('fundSymInput');

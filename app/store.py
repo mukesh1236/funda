@@ -934,14 +934,18 @@ class RecommendationStore:
             ).fetchone()
         return dict(row) if row else None
 
-    def latest_factsheet(self, symbol: str) -> Optional[dict]:
-        """Most recent cached summary for a fund regardless of document version.
-        Used to serve something honest when the AI budget is exhausted."""
+    def latest_factsheet(self, symbol: str, schema_ver: int = 1) -> Optional[dict]:
+        """Most recent cached summary for a fund, for the CURRENT schema only.
+
+        Filtering on schema_ver matters: without it, bumping the summary schema
+        would keep serving old-shape rows forever and the rebuild would never
+        be queued.
+        """
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM fund_factsheets WHERE symbol = ? "
+                "SELECT * FROM fund_factsheets WHERE symbol = ? AND schema_ver = ? "
                 "ORDER BY generated_at DESC LIMIT 1",
-                (symbol.upper().strip(),),
+                (symbol.upper().strip(), schema_ver),
             ).fetchone()
         return dict(row) if row else None
 

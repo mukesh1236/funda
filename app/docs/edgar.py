@@ -33,13 +33,24 @@ COMMENTARY_FORMS = ("N-CSR", "N-CSRS")
 _MAX_CANDIDATES = 6            # cap EDGAR fetches per fund
 _VALIDATE_CHARS = 20_000       # how far in to look for proof of the right fund
 _MIN_SECTIONS_FOR_497 = 3      # a bare supplement has almost none
-_MAX_DOC_BYTES = 4_000_000
 
-# "Ticker Symbol: VFIAX", "Ticker: VOO", "(VFIAX)" — how filings label a series.
+
+def _max_doc_bytes() -> int:
+    from app.config import get_settings
+
+    return get_settings().factsheet_max_doc_bytes
+
+# "Ticker Symbol: VFIAX", "Ticker: VOO" — how a filing labels a series.
 # The label is matched case-insensitively but the ticker itself is not: lowering
 # the whole pattern would make any 3-6 letter word look like a ticker.
+#
+# Deliberately does NOT match a bare "(VFIAX)". Prospectuses are full of
+# parenthesised acronyms — (SEC), (NAV), (ETF), (IRA) — and treating those as
+# series tickers makes an ordinary single-fund filing look combined, which
+# truncates it at the first acronym and then fails the match entirely. The
+# labelled form plus the fund-name heading below are the reliable signals.
 _TICKER_LABEL_RE = re.compile(
-    r"(?:(?i:ticker(?:\s+symbol)?s?)\s*[:\-]\s*|\()\s*([A-Z]{3,6})\b")
+    r"(?i:ticker(?:\s+symbol)?s?)\s*[:\-]\s*([A-Z]{3,6})\b")
 
 # A fund-name heading: a short line ending in Fund / ETF / Portfolio / Trust.
 # Second, independent signal for "this filing covers more than one fund" —
@@ -162,7 +173,7 @@ class EdgarFundDocs:
         if resp is None:
             return None
         raw = resp.content or b""
-        if len(raw) > _MAX_DOC_BYTES:
+        if len(raw) > _max_doc_bytes():
             logger.info("edgar: %s %s too large (%d bytes) — skipped",
                         ref.symbol, ref.form_type, len(raw))
             return None

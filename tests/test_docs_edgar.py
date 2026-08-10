@@ -188,3 +188,61 @@ class TestDocumentRef:
         r = DocumentRef(symbol="X", source="amc", form_type="factsheet_pdf",
                         url="https://amc.example/f.pdf")
         assert r.doc_key == "https://amc.example/f.pdf"
+
+
+class TestRegressions:
+    """Bugs found in review that the original fixtures didn't expose."""
+
+    def test_parenthesised_acronyms_do_not_look_like_a_combined_filing(self):
+        """Prospectuses are full of (SEC), (NAV), (ETF), (IRA). Treating those
+        as series tickers made an ordinary single-fund filing look combined,
+        truncating it at the first acronym and then failing to match at all —
+        which would have broken most real funds."""
+        text = ("Acme Growth Fund\nTicker Symbol: ACMGX\n"
+                "The Securities and Exchange Commission (SEC) requires this. "
+                "Net asset value (NAV) is calculated daily. "
+                "An individual retirement account (IRA) may hold shares. "
+                "Principal Risks\nYou could lose money.")
+        span = locate_fund_span(text, "ACMGX", "Acme Growth Fund")
+        assert span == (0, len(text)), "must be treated as one whole fund document"
+
+    def test_still_detects_a_genuinely_combined_filing(self):
+        from app.docs.parse import html_to_text
+        text = html_to_text(COMBINED_HTML)
+        assert locate_fund_span(text, "ACMVX", "Acme Value Fund") != (0, len(text))
+
+    def test_one_bad_candidate_does_not_abort_the_rest(self):
+        """The first filing raising must not prevent trying the next one."""
+        import app.funds as funds_mod
+        from app.docs.base import DocumentRef, RawDocument, Section
+        from app.store import RecommendationStore
+        import tempfile, os
+
+        store = RecommendationStore(os.path.join(tempfile.mkdtemp(), "t.db"))
+        good_text = "Principal Risks\nYou could lose money."
+
+        class Flaky:
+            source = "edgar"
+            def find_documents(self, sym):
+                return [DocumentRef(symbol=sym, source="edgar", form_type="497",
+                                    url="bad", accession="a1"),
+                        DocumentRef(symbol=sym, source="edgar", form_type="497K",
+                                    url="good", accession="a2")]
+            def fetch(self, ref):
+                if ref.url == "bad":
+                    raise RuntimeError("EDGAR blew up")
+                return RawDocument(ref=ref, text=good_text,
+                                   sections=[Section("risks", "Principal Risks",
+                                                     0, len(good_text))])
+
+        orig_store = funds_mod._store
+        try:
+            funds_mod._store = store
+            with patch("app.docs.get_fetcher", lambda s, m="us": Flaky()), \
+                 patch("app.fund_rag.build_index", return_value=True), \
+                 patch("app.factsheet.generate_summary",
+                       return_value=({"headline": "h", "sections": [], "jargon": []}, [], "m")):
+                funds_mod._factsheet_bg("ACMGX", "us", False)
+            assert store.get_factsheet_status("ACMGX")["state"] == "ready"
+        finally:
+            funds_mod._store = orig_store

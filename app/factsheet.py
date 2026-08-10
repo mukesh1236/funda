@@ -224,15 +224,31 @@ def _numbers_in(text: str) -> List[str]:
     return _NUMBER_RE.findall(text or "")
 
 
+def _as_number(token: str) -> Optional[float]:
+    try:
+        return float(token.strip("$%").replace(",", ""))
+    except ValueError:
+        return None
+
+
 def _number_is_supported(token: str, pool: set) -> bool:
-    """A number is allowed if it appears in FACTS or an excerpt, ignoring
-    thousands separators and a trailing % or leading $."""
+    """A number is allowed if it appears in FACTS or an excerpt.
+
+    Compared numerically, not as text: FACTS stores 55.0 while a model
+    naturally writes "$55 a year", and a string comparison would reject its own
+    source data and blank out the section.
+    """
     bare = token.strip("$%").replace(",", "")
     if bare in _ALWAYS_ALLOWED:
         return True
+    value = _as_number(token)
     for known in pool:
         if known.strip("$%").replace(",", "") == bare:
             return True
+        if value is not None:
+            kv = _as_number(known)
+            if kv is not None and abs(kv - value) < 1e-9:
+                return True
     return False
 
 

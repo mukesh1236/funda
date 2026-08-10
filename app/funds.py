@@ -326,7 +326,14 @@ def _factsheet_bg(sym: str, market: str, force: bool) -> None:
         for ref in refs:
             _store.set_factsheet_status(sym, "parsing", "Reading the prospectus",
                                         doc_key=ref.doc_key)
-            doc = fetcher.fetch(ref)
+            try:
+                doc = fetcher.fetch(ref)
+            except Exception as e:
+                # One bad candidate must not abort the rest — the next filing
+                # down the priority chain is often perfectly usable.
+                logger.info("factsheet: %s %s failed to fetch: %s",
+                            sym, ref.form_type, e)
+                doc = None
             if doc is not None:
                 used = ref
                 break
@@ -377,6 +384,25 @@ def _factsheet_bg(sym: str, market: str, force: bool) -> None:
             _FS_PENDING.discard(sym)
 
 
+_FS_UNAVAILABLE_TTL_HOURS = 6
+
+
+def _recently(iso_ts: Optional[str], hours: int = _FS_UNAVAILABLE_TTL_HOURS) -> bool:
+    """True if `iso_ts` is within the last `hours`. Unparseable/missing counts
+    as recent, so a bad timestamp can't cause an endless rebuild loop."""
+    if not iso_ts:
+        return True
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        ts = datetime.fromisoformat(iso_ts)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) - ts < timedelta(hours=hours)
+    except Exception:
+        return True
+
+
 def _citations_for(sym: str) -> List[FactsheetCitation]:
     """Excerpt-number -> filing location, so [S1] can render as a real link."""
     docs = _store.get_fund_documents(sym)
@@ -408,24 +434,29 @@ def _factsheet_payload(sym: str, market: str) -> Optional[FundFactsheetResult]:
     status = _store.get_factsheet_status(sym) or {}
     doc_key = status.get("doc_key")
     row = (_store.get_factsheet(sym, doc_key, fs.SUMMARY_SCHEMA_VERSION)
-           if doc_key else None) or _store.latest_factsheet(sym)
+           if doc_key else None) or _store.latest_factsheet(
+               sym, fs.SUMMARY_SCHEMA_VERSION)
     if not row:
         return None
+    # Everything that touches the stored blob stays inside the guard: a legacy
+    # or truncated row must fall back to a rebuild, not 500 an endpoint the UI
+    # polls every 12 seconds.
     try:
         blob = json.loads(row["summary_json"])
-    except Exception:
+        summary = FundFactsheetSummary(**blob.get("summary", {}))
+        docs = [FundDocumentRef(form_type=d["form_type"],
+                                doc_role=d.get("doc_role") or "primary",
+                                filed_date=d.get("filed_date"), title=d.get("title"),
+                                url=d["url"])
+                for d in _store.get_fund_documents(sym)]
+        return FundFactsheetResult(
+            symbol=sym, status="ready", summary=summary,
+            facts=fs.build_facts(sym, _store),
+            documents=docs, citations=_citations_for(sym),
+            generated_at=row.get("generated_at"), notes=blob.get("notes") or [])
+    except Exception as e:
+        logger.info("factsheet cache for %s unusable, will rebuild: %s", sym, e)
         return None
-
-    docs = [FundDocumentRef(form_type=d["form_type"], doc_role=d.get("doc_role") or "primary",
-                            filed_date=d.get("filed_date"), title=d.get("title"),
-                            url=d["url"])
-            for d in _store.get_fund_documents(sym)]
-    return FundFactsheetResult(
-        symbol=sym, status="ready",
-        summary=FundFactsheetSummary(**blob.get("summary", {})),
-        facts=fs.build_facts(sym, _store),
-        documents=docs, citations=_citations_for(sym),
-        generated_at=row.get("generated_at"), notes=blob.get("notes") or [])
 
 
 @router.get("/{symbol}/factsheet", response_model=FundFactsheetResult)
@@ -448,7 +479,10 @@ def fund_factsheet(symbol: str, background_tasks: BackgroundTasks,
 
     status = _store.get_factsheet_status(sym) or {}
     state = status.get("state")
-    if state == "unavailable":
+    if state == "unavailable" and _recently(status.get("updated_at")):
+        # Honoured only for a while: "unavailable" covers a transient EDGAR
+        # outage as well as a genuine mismatch, and a sticky flag would let one
+        # 503 disable a fund's fact sheet permanently for every user.
         return FundFactsheetResult(symbol=sym, status="unavailable",
                                    notes=[status.get("detail") or
                                           "No source document is available for this fund."])
@@ -459,8 +493,13 @@ def fund_factsheet(symbol: str, background_tasks: BackgroundTasks,
             _store.set_factsheet_status(sym, "queued", "Queued")
             background_tasks.add_task(_factsheet_bg, sym, market, False)
 
+    # Reaching here means there is no usable summary, whatever the status row
+    # claims. Echoing a stale "ready" or "unavailable" would tell the UI to stop
+    # polling for a build that was just queued.
+    in_progress = {"fetching", "parsing", "indexing", "summarizing"}
+    reported = state if state in in_progress else "queued"
     return FundFactsheetResult(
-        symbol=sym, status=status.get("state") or "queued",
+        symbol=sym, status=reported,
         notes=[status.get("detail") or
                "Reading this fund's filing — this takes up to a minute."])
 
@@ -479,13 +518,18 @@ def refresh_factsheet(symbol: str, background_tasks: BackgroundTasks,
     if _FS_REFRESH_LIMIT.get(sym) is not None:
         raise HTTPException(429, detail="This fact sheet was refreshed recently — "
                                         "try again in an hour.")
-    _FS_REFRESH_LIMIT[sym] = True
 
+    queued = False
     with _FS_LOCK:
         if sym not in _FS_PENDING:
             _FS_PENDING.add(sym)
             _store.set_factsheet_status(sym, "queued", "Queued")
             background_tasks.add_task(_factsheet_bg, sym, market, True)
+            queued = True
+    # Only spend the hourly allowance on a refresh that actually ran; a request
+    # dropped because a build was already in flight shouldn't burn it.
+    if queued:
+        _FS_REFRESH_LIMIT[sym] = True
     return {"status": "queued", "symbol": sym}
 
 

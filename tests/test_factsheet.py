@@ -273,9 +273,8 @@ class TestBudget:
 class TestChatIntegration:
     """The chat fund branch should reuse work the fact sheet already did."""
 
-    def test_cached_factsheet_enriches_fund_context(self, store, monkeypatch):
+    def test_cached_factsheet_enriches_fund_context(self, store):
         import json as _json
-        import app.main as main_mod
         from app.chat import _factsheet_context
 
         store.save_factsheet("ACMGX", "acc-1", _json.dumps({
@@ -286,15 +285,42 @@ class TestChatIntegration:
                               "bullets": [{"text": "Stock market risk.", "cite": None}]}],
                 "jargon": []},
             "notes": []}), "m", 1)
-        monkeypatch.setattr(main_mod, "store", store)
 
-        ctx = _factsheet_context("ACMGX")
+        ctx = _factsheet_context(store, "ACMGX")
         assert "A low-cost index fund." in ctx
         assert "Stock market risk." in ctx
 
-    def test_no_factsheet_adds_nothing(self, store, monkeypatch):
-        import app.main as main_mod
+    def test_no_factsheet_adds_nothing(self, store):
         from app.chat import _factsheet_context
 
-        monkeypatch.setattr(main_mod, "store", store)
-        assert _factsheet_context("NOSUCH") == ""
+        assert _factsheet_context(store, "NOSUCH") == ""
+
+
+class TestNumericProvenanceRegressions:
+    """Review findings: the guard was rejecting its own source data."""
+
+    def test_natural_dollar_phrasing_is_accepted(self):
+        """FACTS stores 55.0; a model writes "$55 a year". String comparison
+        rejected that and blanked the whole 'What it costs' section."""
+        out = _model_output(what_it_costs={"bullets": [
+            {"text": "You pay about $55 a year on every $10,000 invested."}]})
+        clean, notes = validate_summary(out, FACTS, [])
+        costs = next(s for s in clean["sections"] if s["key"] == "what_it_costs")
+        assert "$55 a year" in costs["bullets"][0]["text"]
+        assert notes == []
+
+    def test_trailing_zero_forms_match(self):
+        out = _model_output(how_its_done={"bullets": [
+            {"text": "It returned 12.30% over one year."}]})
+        clean, _ = validate_summary(out, FACTS, [])
+        done = next(s for s in clean["sections"] if s["key"] == "how_its_done")
+        assert "12.30%" in done["bullets"][0]["text"]
+
+    def test_genuinely_invented_number_still_dropped(self):
+        """The relaxation must not defeat the check it exists for."""
+        out = _model_output(how_its_done={"bullets": [
+            {"text": "It returned 47.9% over one year."}]})
+        clean, notes = validate_summary(out, FACTS, [])
+        done = next(s for s in clean["sections"] if s["key"] == "how_its_done")
+        assert done["bullets"][0]["text"] == "Not disclosed in the source document."
+        assert notes
