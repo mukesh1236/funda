@@ -268,3 +268,33 @@ class TestBudget:
             assert budget_ok(store, settings) is True
         with patch.object(RecommendationStore, "llm_stats", return_value={"calls_today": 80}):
             assert budget_ok(store, settings) is False
+
+
+class TestChatIntegration:
+    """The chat fund branch should reuse work the fact sheet already did."""
+
+    def test_cached_factsheet_enriches_fund_context(self, store, monkeypatch):
+        import json as _json
+        import app.main as main_mod
+        from app.chat import _factsheet_context
+
+        store.save_factsheet("ACMGX", "acc-1", _json.dumps({
+            "summary": {
+                "headline": "A low-cost index fund.",
+                "sections": [{"key": "what_could_go_wrong",
+                              "title": "What could go wrong",
+                              "bullets": [{"text": "Stock market risk.", "cite": None}]}],
+                "jargon": []},
+            "notes": []}), "m", 1)
+        monkeypatch.setattr(main_mod, "store", store)
+
+        ctx = _factsheet_context("ACMGX")
+        assert "A low-cost index fund." in ctx
+        assert "Stock market risk." in ctx
+
+    def test_no_factsheet_adds_nothing(self, store, monkeypatch):
+        import app.main as main_mod
+        from app.chat import _factsheet_context
+
+        monkeypatch.setattr(main_mod, "store", store)
+        assert _factsheet_context("NOSUCH") == ""
