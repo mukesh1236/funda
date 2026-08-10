@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     # ephemeral filesystem and every index is lost on redeploy.
     fund_index_dir: str = "./data/fund_index"
 
+    # Fact-sheet ingest bounds. A full statutory prospectus is 50-200 pages;
+    # these keep one fund's ingest from exhausting a small container's CPU and
+    # memory (the embedding step is the expensive part).
+    factsheet_max_chunks: int = 1500
+    factsheet_max_doc_bytes: int = 4_000_000
+
     # Outcome validation horizon (days a target has to be hit)
     outcome_horizon_days: int = 365
 

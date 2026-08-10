@@ -201,8 +201,13 @@ class TestFundRAG:
         result = query_fund_docs("NOSUCHFUND_XYZ", "what is the expense ratio?")
         assert result == ""
 
-    def test_ingest_and_query(self, tmp_path, monkeypatch):
-        """Ingest a synthetic doc and query returns relevant chunks."""
+    def test_index_and_query_real_document_chunks(self, tmp_path, monkeypatch):
+        """Index provenance-carrying chunks and retrieve them by meaning.
+
+        The corpus is now real filing text, not prose synthesized from the
+        yfinance fields the caller already has, so this indexes ChunkRecords
+        directly rather than mocking app.fund_data.
+        """
         pytest.importorskip("faiss", reason="faiss-cpu not installed")
         pytest.importorskip("sentence_transformers", reason="sentence-transformers not installed")
 
@@ -211,33 +216,49 @@ class TestFundRAG:
             rag_mod._model()
         except Exception as e:
             pytest.skip(f"embedding model unavailable in this environment: {e}")
-        # Redirect index storage to tmp dir (patch the resolver, not a constant —
-        # the path is read from settings on every call so it can point at the
-        # mounted volume in production).
+
         monkeypatch.setattr(rag_mod, "_index_dir", lambda: tmp_path)
-        # Clear in-memory cache
         rag_mod._cache.clear()
 
-        # Provide deterministic fund data
-        mock_info = {
-            "name": "Test Fund", "category": "Large Blend",
-            "expense_ratio": 0.05, "sector_weights": {}, "holdings": [],
-        }
-        mock_perf = {
-            "inception_date": "2000-01-01", "years_since_inception": 24.0,
-            "since_inception_cagr": 8.0, "total_return_pct": 500.0,
-            "cagr_1y": 10.0, "cagr_3y": 9.0, "cagr_5y": 8.5,
-        }
+        def rec(text, section, heading):
+            return rag_mod.ChunkRecord(
+                text=text, symbol="TESTFUND", source="edgar", form_type="497K",
+                filed_date="2025-04-28", accession="0001-25-1",
+                section=section, heading=heading, url="https://sec.gov/x.htm")
 
-        with patch("app.fund_data.get_fund_info", return_value=mock_info), \
-             patch("app.fund_data.get_fund_performance", return_value=mock_perf):
-            ok = rag_mod.ingest_fund_docs("TESTFUND")
+        records = [
+            rec("The annual fund operating expense ratio is 0.05% of net assets, "
+                "charged daily against the fund's assets.", "fees", "Fees and Expenses"),
+            rec("Stock market risk means the value of your investment may fall "
+                "sharply during a market downturn and you could lose money.",
+                "risks", "Principal Risks"),
+            rec("The fund employs an indexing approach designed to track the "
+                "performance of a broad market index.", "strategy",
+                "Principal Investment Strategies"),
+        ]
+        assert rag_mod.build_index("TESTFUND", records, doc_keys=["0001-25-1"]) is True
 
-        assert ok is True
+        hits = rag_mod.retrieve("TESTFUND", "what does this fund cost me in fees?")
+        assert hits, "expected the fee passage to be retrieved"
+        assert hits[0].record.section == "fees"
+        # Provenance survives the round-trip, which is what enables citations.
+        assert hits[0].record.form_type == "497K"
+        assert hits[0].record.url == "https://sec.gov/x.htm"
+        assert "497K" in hits[0].record.citation_label()
 
-        with patch("app.fund_data.get_fund_info", return_value=mock_info), \
-             patch("app.fund_data.get_fund_performance", return_value=mock_perf):
-            ctx = rag_mod.query_fund_docs("TESTFUND", "expense ratio")
+    def test_v1_index_without_meta_is_treated_as_absent(self, tmp_path, monkeypatch):
+        """Existing on-disk indexes stored a flat list of strings. Loading one
+        as records would crash, so it must be ignored and rebuilt instead."""
+        import json
+        import app.fund_rag as rag_mod
 
-        assert ctx != ""
-        assert "expense" in ctx.lower() or "0.05" in ctx
+        monkeypatch.setattr(rag_mod, "_index_dir", lambda: tmp_path)
+        rag_mod._cache.clear()
+
+        legacy = tmp_path / "OLDFUND"
+        legacy.mkdir(parents=True)
+        (legacy / "index.faiss").write_bytes(b"not-a-real-index")
+        (legacy / "chunks.json").write_text(json.dumps(["a flat v1 string chunk"]))
+
+        assert rag_mod.fund_index_exists("OLDFUND") is False
+        assert rag_mod.retrieve("OLDFUND", "expense ratio") == []
