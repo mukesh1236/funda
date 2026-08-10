@@ -171,6 +171,9 @@ CREATE TABLE IF NOT EXISTS fund_portfolio (
     id       INTEGER PRIMARY KEY,
     user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     symbol   TEXT NOT NULL COLLATE NOCASE,
+    -- What the user holds in this fund. NULL means "not told us": the X-Ray
+    -- still works by equal-weighting, but reports no currency figures.
+    amount   REAL,
     added_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(user_id, symbol)
 );
@@ -274,6 +277,12 @@ class RecommendationStore:
         user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
         if user_cols and "role" not in user_cols:
             conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+        # Optional holding value per tracked fund, for Portfolio X-Ray. Nullable
+        # on purpose: the X-Ray works without it (equal-weighting the funds and
+        # saying so), and only reports money figures once a real amount exists.
+        fp_cols = {row["name"] for row in conn.execute("PRAGMA table_info(fund_portfolio)")}
+        if fp_cols and "amount" not in fp_cols:
+            conn.execute("ALTER TABLE fund_portfolio ADD COLUMN amount REAL")
 
     # ── writes ──────────────────────────────────────────────────────────────────
     def add_recommendation(self, rec: AnalystRecommendation) -> Optional[int]:
@@ -728,13 +737,27 @@ class RecommendationStore:
             return bool(cur.rowcount)
 
     def list_fund_portfolio(self, user_id: int) -> List[dict]:
-        """Return [{symbol, added_at}] for the user's tracked funds, newest first."""
+        """Return [{symbol, amount, added_at}] for the user's tracked funds,
+        newest first. `amount` is None when the user hasn't entered one."""
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT symbol, added_at FROM fund_portfolio WHERE user_id = ? ORDER BY added_at DESC",
+                "SELECT symbol, amount, added_at FROM fund_portfolio "
+                "WHERE user_id = ? ORDER BY added_at DESC",
                 (user_id,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def set_fund_amount(self, user_id: int, symbol: str,
+                        amount: Optional[float]) -> bool:
+        """Set (or clear, with None) the holding value for a tracked fund.
+        Returns False if the fund isn't in the user's portfolio."""
+        with _write_lock, self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE fund_portfolio SET amount = ? "
+                "WHERE user_id = ? AND symbol = ? COLLATE NOCASE",
+                (amount, user_id, symbol.upper()),
+            )
+            return bool(cur.rowcount)
 
     # ── chat answer sources (fallback-rate tracking) ─────────────────────────
     def add_chat_answer(self, source: str) -> None:

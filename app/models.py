@@ -545,6 +545,9 @@ class FundPortfolioItem(BaseModel):
     symbol: str
     added_at: str
     metrics: Optional[FundMetrics] = None
+    # What the user holds in this fund. None = not entered; the X-Ray still
+    # works, it just equal-weights and reports no currency figures.
+    amount: Optional[float] = None
 
 
 class FundCompareResult(BaseModel):
@@ -640,3 +643,49 @@ class FactsheetAskResponse(BaseModel):
     # llm | no-context | out-of-scope | advice-declined | budget_exhausted
     # | unavailable | unverifiable
     source: str
+
+
+# ── Portfolio X-Ray ───────────────────────────────────────────────────────────
+
+class XRayHolding(BaseModel):
+    name: str
+    ticker: Optional[str] = None
+    effective_weight_pct: float
+    held_by: List[str] = []
+
+
+class PortfolioXRayResult(BaseModel):
+    # ready | computing | empty
+    status: str
+    fund_count: int = 0
+    overlap_pct: float = 0.0
+    duplicated: List[XRayHolding] = []
+    concentration_top10_pct: float = 0.0
+    largest_position: Optional[XRayHolding] = None
+    blended_expense_ratio: Optional[float] = None
+    # Money figures are present ONLY when every fund has an amount entered —
+    # never estimated from an assumed portfolio size.
+    total_amount: Optional[float] = None
+    annual_fee: Optional[float] = None
+    fee_on_overlap: Optional[float] = None
+    amount_weighted: bool = False
+    # False when any fund resolved only to its top-10 holdings, which makes the
+    # reported overlap a floor rather than the true figure.
+    complete_holdings: bool = True
+    notes: List[str] = []
+
+
+class FundAmountRequest(BaseModel):
+    """None clears the amount, returning that fund to equal-weighting."""
+    amount: Optional[float] = None
+
+    @field_validator("amount")
+    @classmethod
+    def _amt(cls, v: Optional[float]) -> Optional[float]:
+        if v is None:
+            return None
+        if v < 0:
+            raise ValueError("Amount cannot be negative.")
+        if v > 1e12:
+            raise ValueError("Amount is unrealistically large.")
+        return float(v)

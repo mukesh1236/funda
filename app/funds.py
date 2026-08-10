@@ -27,6 +27,7 @@ from app.models import (
     FactsheetAskResponse,
     FactsheetCitation,
     FundAddRequest,
+    FundAmountRequest,
     FundCompareResult,
     FundDetail,
     FundDocumentRef,
@@ -37,6 +38,7 @@ from app.models import (
     FundHolding,
     FundMetrics,
     FundPortfolioItem,
+    PortfolioXRayResult,
     normalize_symbol,
 )
 from app.store import RecommendationStore
@@ -88,11 +90,21 @@ def _build_metrics(symbol: str) -> Optional[FundMetrics]:
 
 # ── overlap logic ─────────────────────────────────────────────────────────────
 
+def holding_key(h: dict) -> str:
+    """Identity for one underlying position: ticker when known, else the
+    normalised company name.
+
+    Shared by the two-fund compare below and the N-fund Portfolio X-Ray
+    (app/portfolio.py) — the same holding has to resolve to the same key in
+    both, or an overlap number computed one way can't be reconciled with the
+    other.
+    """
+    return h.get("ticker") or _norm(h.get("name", ""))
+
+
 def _compare_holdings(h1: List[dict], h2: List[dict]) -> dict:
     """Match holdings by ticker (preferred) then normalised name."""
-
-    def key(h: dict) -> str:
-        return h.get("ticker") or _norm(h.get("name", ""))
+    key = holding_key
 
     map1 = {key(h): h for h in h1 if key(h)}
     map2 = {key(h): h for h in h2 if key(h)}
@@ -657,9 +669,115 @@ def list_funds(user: dict = Depends(get_current_user)):
     with ThreadPoolExecutor(max_workers=min(8, len(rows))) as ex:
         metrics_list = list(ex.map(lambda r: _build_metrics(r["symbol"]), rows))
     return [
-        FundPortfolioItem(symbol=row["symbol"], added_at=row["added_at"], metrics=m)
+        FundPortfolioItem(symbol=row["symbol"], added_at=row["added_at"], metrics=m,
+                          amount=row.get("amount"))
         for row, m in zip(rows, metrics_list)
     ]
+
+
+# ── Portfolio X-Ray ───────────────────────────────────────────────────────────
+
+_XRAY_CACHE: TTLCache = TTLCache(maxsize=256, ttl=6 * 3600)   # user_id → result
+_XRAY_PENDING: set = set()
+_XRAY_LOCK = threading.Lock()
+
+
+def _xray_inputs(user_id: int) -> tuple:
+    """(inputs, excluded_symbols) for the user's tracked funds.
+
+    This is the slow part — a cold fund means an SEC N-PORT fetch — so callers
+    run it in the background, never inside a request.
+
+    A fund with no resolvable holdings can't be x-rayed, but dropping it
+    silently would report an overlap computed over a subset of the portfolio as
+    though it covered all of it. The excluded symbols come back so the caller
+    can say so.
+    """
+    from app.portfolio import FundInput
+
+    rows = _store.list_fund_portfolio(user_id)
+    if not rows:
+        return [], []
+
+    def one(row: dict) -> Optional[FundInput]:
+        sym = row["symbol"]
+        try:
+            holdings, _as_of, source, _notes = _load_all_holdings(sym)
+        except Exception as e:
+            logger.info("xray: holdings unavailable for %s: %s", sym, e)
+            return None
+        if not holdings:
+            return None
+        info = get_fund_info(sym) or {}
+        return FundInput(
+            symbol=sym, holdings=holdings, source=source,
+            expense_ratio=info.get("expense_ratio"),
+            amount=row.get("amount"), name=info.get("name"))
+
+    with ThreadPoolExecutor(max_workers=min(8, len(rows))) as ex:
+        built = list(ex.map(one, rows))
+    inputs = [b for b in built if b is not None]
+    excluded = [r["symbol"] for r, b in zip(rows, built) if b is None]
+    return inputs, excluded
+
+
+def _compute_xray_bg(user_id: int) -> None:
+    from app.portfolio import build_xray
+
+    try:
+        inputs, excluded = _xray_inputs(user_id)
+        _XRAY_CACHE[user_id] = build_xray(inputs, excluded=excluded)
+    except Exception as e:
+        logger.warning("xray background compute failed for user %s: %s", user_id, e)
+    finally:
+        with _XRAY_LOCK:
+            _XRAY_PENDING.discard(user_id)
+
+
+@router.get("/portfolio/xray", response_model=PortfolioXRayResult)
+def portfolio_xray(background_tasks: BackgroundTasks,
+                   user: dict = Depends(get_current_user)):
+    """What the user actually owns across their funds: overlap, real fee cost,
+    concentration.
+
+    Cold funds need an SEC N-PORT fetch, so this clones the background pattern
+    used by the drivers and fact-sheet endpoints — always 200, poll until ready.
+    """
+    uid = user["id"]
+    cached = _XRAY_CACHE.get(uid)
+    if cached is not None:
+        return PortfolioXRayResult(status="ready", **cached.to_dict())
+
+    if not _store.list_fund_portfolio(uid):
+        return PortfolioXRayResult(
+            status="empty",
+            notes=["Add the funds you hold to see what you actually own across them."])
+
+    with _XRAY_LOCK:
+        if uid not in _XRAY_PENDING:
+            _XRAY_PENDING.add(uid)
+            background_tasks.add_task(_compute_xray_bg, uid)
+
+    return PortfolioXRayResult(
+        status="computing",
+        notes=["Reading the full holdings of each fund — this takes a moment the "
+               "first time."])
+
+
+@router.patch("/{symbol}/amount", response_model=dict)
+def set_fund_amount(symbol: str, req: FundAmountRequest,
+                    user: dict = Depends(get_current_user)):
+    """Set or clear how much the user holds in a fund. Clearing returns that
+    fund to equal-weighting in the X-Ray."""
+    try:
+        sym = normalize_symbol(symbol)
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e))
+    if not _store.set_fund_amount(user["id"], sym, req.amount):
+        raise HTTPException(404, detail=f"{sym} is not in your funds.")
+    # The amount changes every weighting in the X-Ray, so the cached one is stale.
+    _XRAY_CACHE.pop(user["id"], None)
+    return {"status": "ok", "symbol": sym, "amount": req.amount}
 
 
 @router.post("", response_model=FundPortfolioItem, status_code=201)
@@ -676,6 +794,9 @@ def add_fund(
 
     _store.add_fund(user["id"], sym)
     background_tasks.add_task(_ingest_rag, sym)
+    # The X-Ray describes the whole portfolio, so it is wrong the moment the
+    # portfolio changes — not 6 hours later when the TTL expires.
+    _XRAY_CACHE.pop(user["id"], None)
 
     metrics = _build_metrics(sym)
     return FundPortfolioItem(symbol=sym, added_at="just now", metrics=metrics)
@@ -689,6 +810,7 @@ def remove_fund(symbol: str, user: dict = Depends(get_current_user)):
     except ValueError as e:
         raise HTTPException(422, detail=str(e))
     _store.remove_fund(user["id"], sym)
+    _XRAY_CACHE.pop(user["id"], None)
     return {"status": "ok", "symbol": sym}
 
 

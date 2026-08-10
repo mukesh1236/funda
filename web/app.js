@@ -32,8 +32,8 @@ async function getJSON(path) {
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
   return res.json();
 }
-async function postJSON(path, body) {
-  const opts = { method: 'POST' };
+async function postJSON(path, body, method) {
+  const opts = { method: method || 'POST' };
   if (body !== undefined) {
     opts.headers = { 'Content-Type': 'application/json' };
     opts.body = JSON.stringify(body);
@@ -1180,6 +1180,12 @@ function _fundCard(f) {
         <div class="fund-metric"><div class="fm-val">${_cagr(m.cagr_5y)}</div><div class="fm-lbl">5Y CAGR</div></div>
         <div class="fund-metric"><div class="fm-val">${_cagr(m.since_inception_cagr)}</div><div class="fm-lbl">Since inception</div></div>
       </div>
+      <div class="fund-amt-row">
+        <label for="amt-${esc(f.symbol)}" class="muted">You hold</label>
+        <input class="fund-amt" id="amt-${esc(f.symbol)}" data-sym="${esc(f.symbol)}"
+               type="number" min="0" step="any" inputmode="decimal"
+               placeholder="optional" value="${f.amount != null ? esc(String(f.amount)) : ''}" />
+      </div>
       <div class="fund-fs-panel" id="ffs-${esc(f.symbol)}" style="display:none"></div>
       <button class="fund-detail-btn" data-sym="${esc(f.symbol)}">Details ▾</button>
       <div class="fund-detail-panel" id="fdp-${esc(f.symbol)}" style="display:none"></div>
@@ -1541,11 +1547,21 @@ async function loadFunds() {
       <div id="compareOut"></div>
     </div>`;
 
-  $('#content').innerHTML = addBar + '<h4 style="padding:0 0 8px">My tracked funds</h4>' + portfolioHtml + compareSection;
+  const xraySection = _currentUser
+    ? '<div class="xray-section" id="xraySection"></div>' : '';
+
+  $('#content').innerHTML = addBar + xraySection
+    + '<h4 style="padding:0 0 8px">My tracked funds</h4>' + portfolioHtml + compareSection;
+
+  if (_currentUser) _loadXray(0);
 
   document.getElementById('fundAddBtn').addEventListener('click', _addFund);
   document.getElementById('fundSymInput').addEventListener('keydown', e => { if (e.key === 'Enter') _addFund(); });
   document.getElementById('cmpBtn').addEventListener('click', _runCompare);
+  $('#content').querySelectorAll('.fund-amt').forEach(inp => {
+    inp.addEventListener('change', () => _saveFundAmount(inp.dataset.sym, inp.value));
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); });
+  });
 
   const fundSignIn = document.getElementById('fundSignIn');
   if (fundSignIn) fundSignIn.addEventListener('click', () => showAuth());
@@ -1556,6 +1572,118 @@ async function loadFunds() {
     btn.addEventListener('click', () => _removeFund(btn.dataset.sym)));
   $('#content').querySelectorAll('.fund-fs').forEach(btn =>
     btn.addEventListener('click', () => _toggleFactsheet(btn.dataset.sym)));
+}
+
+// ── Portfolio X-Ray ───────────────────────────────────────────────────────────
+// What you actually own once the funds are collapsed into the securities
+// underneath them: overlap, real fee cost, concentration.
+
+const _XRAY_MAX_POLLS = 10;   // capped, like the fact sheet — ingest can fail
+
+// Currency figures are v1-US-only, matching the SEC N-PORT holdings the X-Ray
+// is built from. Always 2dp — "$28.5 a year in fees" reads like a broken
+// number rather than a real one.
+function _xrayMoney(n) {
+  return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function _xrayBar(pct) {
+  const p = Math.max(0, Math.min(100, pct));
+  return `<div class="xray-bar"><span class="xray-bar-fill" style="width:${p.toFixed(1)}%"></span></div>`;
+}
+
+function _xrayRender(d) {
+  if (d.status === 'empty') {
+    return `<div class="empty">${esc((d.notes || []).join(' '))}</div>`;
+  }
+
+  const overlap = d.overlap_pct || 0;
+  // Only ever shown when the user entered amounts for every fund — the API
+  // omits money entirely otherwise rather than guessing a portfolio size.
+  const money = (d.annual_fee != null)
+    ? `<div class="xray-stat">
+         <div class="xray-stat-val">${esc(_xrayMoney(d.annual_fee))}</div>
+         <div class="xray-stat-lbl">a year in fees${
+           d.fee_on_overlap ? ` · ${esc(_xrayMoney(d.fee_on_overlap))} of it on duplicated holdings` : ''}</div>
+       </div>` : '';
+
+  const dupes = (d.duplicated || []).map(h => `
+    <div class="xray-row">
+      <span class="xray-name">${esc(h.name)}</span>
+      <span class="xray-held">${esc((h.held_by || []).join(' · '))}</span>
+      <span class="xray-wt num">${h.effective_weight_pct.toFixed(2)}%</span>
+    </div>`).join('');
+
+  const fee = d.blended_expense_ratio != null
+    ? `<span class="num">${d.blended_expense_ratio}%</span> blended expense ratio` : '';
+  const conc = d.concentration_top10_pct
+    ? `Top 10 positions are <span class="num">${d.concentration_top10_pct.toFixed(1)}%</span> of everything you hold` : '';
+
+  const notes = (d.notes || []).length
+    ? `<p class="xray-notes muted">${esc(d.notes.join(' '))}</p>` : '';
+
+  return `
+    <div class="xray-head">
+      <h4>Portfolio X-Ray</h4>
+      <span class="muted">${d.fund_count} fund${d.fund_count === 1 ? '' : 's'}${
+        d.amount_weighted ? ' · weighted by your amounts' : ' · equal-weighted'}</span>
+    </div>
+    <div class="xray-headline">
+      <span class="xray-big num">${overlap.toFixed(0)}%</span>
+      <span>of your money is in positions held by more than one of your funds</span>
+    </div>
+    ${_xrayBar(overlap)}
+    <div class="xray-stats">
+      ${fee ? `<div class="xray-stat"><div class="xray-stat-val">${fee}</div></div>` : ''}
+      ${money}
+      ${conc ? `<div class="xray-stat"><div class="xray-stat-val">${conc}</div></div>` : ''}
+    </div>
+    ${dupes ? `<div class="xray-dupes">
+        <div class="xray-cols muted"><span>Held by more than one fund</span><span>In</span><span>Your exposure</span></div>
+        ${dupes}
+      </div>` : ''}
+    ${notes}`;
+}
+
+async function _loadXray(attempt) {
+  const box = document.getElementById('xraySection');
+  if (!box) return;
+  attempt = attempt || 0;
+  if (!attempt) box.innerHTML = '<div class="loading">Working out what you actually own…</div>';
+
+  try {
+    const d = await getJSON('/api/funds/portfolio/xray');
+    if (d.status === 'computing') {
+      if (attempt >= _XRAY_MAX_POLLS) {
+        box.innerHTML = '<div class="empty">Still reading your funds’ holdings — reopen this tab shortly.</div>';
+        return;
+      }
+      box.innerHTML = '<div class="loading">Reading the full holdings of each fund…</div>';
+      setTimeout(() => _loadXray(attempt + 1), 8000);
+      return;
+    }
+    box.innerHTML = _xrayRender(d);
+  } catch (e) {
+    if (e.auth) { box.innerHTML = ''; return; }
+    box.innerHTML = `<div class="empty">Could not build the X-Ray: ${esc(e.message)}</div>`;
+  }
+}
+
+async function _saveFundAmount(sym, raw) {
+  const trimmed = (raw || '').trim();
+  const amount = trimmed === '' ? null : Number(trimmed);
+  if (amount !== null && (!isFinite(amount) || amount < 0)) {
+    $('#status').textContent = 'Enter a positive amount, or leave it blank.';
+    return;
+  }
+  try {
+    await postJSON(`/api/funds/${encodeURIComponent(sym)}/amount`, { amount }, 'PATCH');
+    // The amount changes every weighting, so rebuild rather than show a stale one.
+    _loadXray(0);
+  } catch (e) {
+    if (e.auth) return;
+    $('#status').textContent = 'Could not save that amount: ' + e.message;
+  }
 }
 
 // Wire funds into the view system
