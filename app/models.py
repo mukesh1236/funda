@@ -565,3 +565,77 @@ class FundAddRequest(BaseModel):
     @classmethod
     def _sym(cls, v: str) -> str:
         return normalize_symbol(v)
+
+
+# ── Fund fact sheet ───────────────────────────────────────────────────────────
+
+class FactsheetBullet(BaseModel):
+    text: str
+    # "S1" when the claim came from a filing excerpt; None when it came from
+    # the app's own structured data, which needs no citation.
+    cite: Optional[str] = None
+
+
+class FactsheetSection(BaseModel):
+    key: str
+    title: str
+    bullets: List[FactsheetBullet] = []
+
+
+class JargonTerm(BaseModel):
+    term: str
+    plain: str
+
+
+class FundFactsheetSummary(BaseModel):
+    headline: str
+    sections: List[FactsheetSection] = []
+    jargon: List[JargonTerm] = []
+
+
+class FundDocumentRef(BaseModel):
+    form_type: str
+    doc_role: str = "primary"
+    filed_date: Optional[str] = None
+    title: Optional[str] = None
+    url: str
+
+
+class FactsheetCitation(BaseModel):
+    n: int
+    form_type: str
+    filed_date: Optional[str] = None
+    section: Optional[str] = None
+    heading: Optional[str] = None
+    url: str
+
+
+class FundFactsheetResult(BaseModel):
+    symbol: str
+    # queued|fetching|parsing|indexing|summarizing|ready|unavailable|budget_exhausted
+    status: str
+    summary: Optional[FundFactsheetSummary] = None
+    facts: Dict = {}
+    documents: List[FundDocumentRef] = []
+    citations: List[FactsheetCitation] = []
+    generated_at: Optional[str] = None
+    notes: List[str] = []
+
+
+class FactsheetAskRequest(BaseModel):
+    question: str
+
+    @field_validator("question")
+    @classmethod
+    def _q(cls, v: str) -> str:
+        q = (v or "").strip()
+        if not q:
+            raise ValueError("Question cannot be empty.")
+        return q[:500]
+
+
+class FactsheetAskResponse(BaseModel):
+    answer: str
+    citations: List[FactsheetCitation] = []
+    # llm | no-context | out-of-scope | advice-declined | budget_exhausted | unavailable
+    source: str
