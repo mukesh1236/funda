@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     factsheet_max_chunks: int = 1500
     factsheet_max_doc_bytes: int = 4_000_000
 
+    # Share of the daily AI call budget kept in reserve for everything else, so
+    # fact-sheet generation can't starve the chat assistant.
+    factsheet_llm_reserve_pct: float = 0.2
+
     # Outcome validation horizon (days a target has to be hit)
     outcome_horizon_days: int = 365
 
