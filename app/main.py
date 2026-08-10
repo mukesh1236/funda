@@ -517,10 +517,18 @@ def watchlist_remove(
 
 
 @app.get("/api/search")
-def ticker_search(q: str = Query("", min_length=1), market: str = Query("us", pattern="^(us|in)$")):
-    """Company name / partial ticker → [{symbol, name, exchange}] from Yahoo Finance."""
+def ticker_search(q: str = Query("", min_length=1),
+                  market: str = Query("us", pattern="^(us|in)$"),
+                  include_funds: bool = Query(True)):
+    """Company name / partial ticker → [{symbol, name, exchange, type}].
+
+    `type` is stock | etf | fund | index | other, so the caller can route a
+    mutual fund to the Funds view instead of the stock detail page. Pass
+    include_funds=false where a mutual fund isn't actionable (the watchlist
+    pins an entry price, which a once-daily NAV can't support).
+    """
     from app.sources.search import search_tickers
-    return {"results": search_tickers(q, market=market)}
+    return {"results": search_tickers(q, market=market, include_funds=include_funds)}
 
 
 @app.get("/api/market/digest", response_model=MarketDigest)

@@ -15,11 +15,13 @@ yfinance top-10 sample.
 import logging
 import os
 import time
-import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 
 import httpx
 from cachetools import TTLCache
+# defusedxml, not stdlib ElementTree: this parses XML fetched from a remote host,
+# so entity-expansion / external-entity attacks are in scope (BACKLOG S6).
+from defusedxml.ElementTree import ParseError, fromstring as xml_fromstring
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +104,47 @@ def fund_identity(ticker: str) -> Optional[Tuple[int, Optional[str]]]:
     return None
 
 
+def iter_filings(cik: int, forms: Optional[set] = None, limit: int = 20) -> List[dict]:
+    """Recent EDGAR filings for a CIK, newest first, optionally filtered by form.
+
+    Yields dicts of {form, accession, primary_doc, filing_date, url}. The
+    submissions index already carries filingDate and primaryDocument, so the
+    whole candidate list costs exactly one request.
+
+    Shared by the N-PORT holdings fetcher and the fund-document fetcher
+    (app/docs/edgar.py) — both walk the same index looking for different forms.
+    """
+    resp = _get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json")
+    if resp is None:
+        return []
+    try:
+        recent = resp.json()["filings"]["recent"]
+        form_list = recent["form"]
+        accessions = recent["accessionNumber"]
+        docs = recent["primaryDocument"]
+        dates = recent.get("filingDate") or [None] * len(form_list)
+    except Exception as e:
+        logger.warning("EDGAR submissions parse failed for CIK %s: %s", cik, e)
+        return []
+
+    out: List[dict] = []
+    for i, form in enumerate(form_list):
+        if forms is not None and form not in forms:
+            continue
+        acc_raw = accessions[i]
+        acc = acc_raw.replace("-", "")
+        out.append({
+            "form": form,
+            "accession": acc_raw,
+            "primary_doc": docs[i],
+            "filing_date": dates[i] if i < len(dates) else None,
+            "url": f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{docs[i]}",
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _iter_local(root, tag: str):
     """Namespace-agnostic iterator (N-PORT XML uses a default namespace)."""
     for el in root.iter():
@@ -119,9 +162,14 @@ def _text(parent, tag: str) -> Optional[str]:
 def _parse_nport_xml(xml_bytes: bytes, want_series: Optional[str]) -> Optional[dict]:
     """Parse one NPORT-P primary doc. Returns None if it's for another series."""
     try:
-        root = ET.fromstring(xml_bytes)
-    except ET.ParseError as e:
+        root = xml_fromstring(xml_bytes)
+    except ParseError as e:
         logger.info("NPORT XML parse error: %s", e)
+        return None
+    except ValueError as e:
+        # defusedxml raises DefusedXmlException(ValueError) for entity/DTD
+        # attacks — a rejected hostile document, not a malformed one.
+        logger.warning("NPORT XML rejected as unsafe: %s", e)
         return None
 
     series = None
@@ -181,26 +229,12 @@ def fetch_nport_holdings(ticker: str) -> Optional[dict]:
         return None
     cik, series_id = ident
 
-    resp = _get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json")
-    if resp is None:
-        return None
-    try:
-        recent = resp.json()["filings"]["recent"]
-        forms = recent["form"]
-        accessions = recent["accessionNumber"]
-        docs = recent["primaryDocument"]
-    except Exception as e:
-        logger.warning("EDGAR submissions parse failed for CIK %s: %s", cik, e)
-        return None
+    filings = iter_filings(cik, forms={"NPORT-P"}, limit=_MAX_NPORT_DOCS_TO_TRY)
 
     tried = 0
-    for i, form in enumerate(forms):
-        if form != "NPORT-P" or tried >= _MAX_NPORT_DOCS_TO_TRY:
-            continue
+    for filing in filings:
         tried += 1
-        acc = accessions[i].replace("-", "")
-        url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{docs[i]}"
-        doc = _get(url, timeout=60)
+        doc = _get(filing["url"], timeout=60)
         time.sleep(0.15)   # stay far under EDGAR's rate ceiling
         if doc is None:
             continue

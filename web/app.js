@@ -609,7 +609,9 @@ async function loadWatchlist() {
     if (q.length < 2) { drop.innerHTML = ''; drop.classList.remove('open'); return; }
     _wlSearchTimer = setTimeout(async () => {
       try {
-        const res = await getJSON(`/api/search?q=${encodeURIComponent(q)}&market=${currentMarket()}`);
+        // No mutual funds here: the watchlist pins an entry price and tracks
+        // the daily move, which a once-daily NAV can't support.
+        const res = await getJSON(`/api/search?q=${encodeURIComponent(q)}&market=${currentMarket()}&include_funds=false`);
         const hits = res.results || [];
         if (!hits.length) { drop.innerHTML = ''; drop.classList.remove('open'); return; }
         drop.innerHTML = hits.map(h =>
@@ -1166,6 +1168,8 @@ function _fundCard(f) {
           ${m.category ? `<span class="fund-cat">${esc(m.category)}</span>` : ''}
         </div>
         <div class="fund-card-actions">
+          <button class="fund-fs" data-sym="${esc(f.symbol)}"
+                  title="Plain-English summary of this fund's official filing">📄 Fact sheet</button>
           ${rmBtn}
         </div>
       </div>
@@ -1176,9 +1180,155 @@ function _fundCard(f) {
         <div class="fund-metric"><div class="fm-val">${_cagr(m.cagr_5y)}</div><div class="fm-lbl">5Y CAGR</div></div>
         <div class="fund-metric"><div class="fm-val">${_cagr(m.since_inception_cagr)}</div><div class="fm-lbl">Since inception</div></div>
       </div>
+      <div class="fund-fs-panel" id="ffs-${esc(f.symbol)}" style="display:none"></div>
       <button class="fund-detail-btn" data-sym="${esc(f.symbol)}">Details ▾</button>
       <div class="fund-detail-panel" id="fdp-${esc(f.symbol)}" style="display:none"></div>
     </div>`;
+}
+
+// ── Fact sheet ────────────────────────────────────────────────────────────────
+
+// Backend stage -> what the user is actually waiting for. Building a fact sheet
+// takes 30-90s, and a static spinner that long reads as broken.
+const _FS_PROGRESS = {
+  queued:      'Queued…',
+  fetching:    "Finding the fund's official filing…",
+  parsing:     'Reading the prospectus…',
+  indexing:    'Indexing the filing…',
+  summarizing: 'Writing the plain-English summary…',
+};
+// _loadDrivers polls forever; this doesn't. Ingest can legitimately fail, and
+// an endless poll is a silent battery and quota drain on an abandoned tab.
+const _FS_MAX_POLLS = 10;
+
+function _fsCiteLink(cite, citations) {
+  if (!cite) return '';
+  const n = parseInt(String(cite).replace(/^S/, ''), 10);
+  const c = (citations || []).find(x => x.n === n);
+  if (!c) return '';
+  const label = [c.form_type, c.heading].filter(Boolean).join(' · ');
+  return ` <a class="fs-cite" href="${esc(c.url)}" target="_blank" rel="noopener"
+             title="${esc(label)}">[${n}]</a>`;
+}
+
+function _fsRender(sym, d) {
+  const s = d.summary || {};
+  const sections = (s.sections || []).map((sec, i) => `
+    <details class="fs-section" ${i < 2 ? 'open' : ''}>
+      <summary>${esc(sec.title)}</summary>
+      <ul>${(sec.bullets || []).map(b =>
+        `<li>${esc(b.text)}${_fsCiteLink(b.cite, d.citations)}</li>`).join('')}</ul>
+    </details>`).join('');
+
+  const jargon = (s.jargon || []).length ? `
+    <details class="fs-jargon">
+      <summary>Jargon, in plain English (${s.jargon.length})</summary>
+      <dl>${s.jargon.map(j =>
+        `<dt>${esc(j.term)}</dt><dd>${esc(j.plain)}</dd>`).join('')}</dl>
+    </details>` : '';
+
+  // Provenance is never optional: a summary without the filing it came from
+  // is just an assertion.
+  const src = (d.documents || []).map(doc =>
+    `<a href="${esc(doc.url)}" target="_blank" rel="noopener">${esc(doc.form_type)}</a>${
+      doc.filed_date ? ' filed ' + esc(doc.filed_date) : ''}`).join(' · ');
+
+  const notes = (d.notes || []).length
+    ? `<p class="fs-notes muted">${esc(d.notes.join(' '))}</p>` : '';
+
+  return `
+    <p class="fs-headline">${esc(s.headline || '')}</p>
+    ${sections}
+    ${jargon}
+    ${notes}
+    <p class="fs-source muted">Source: ${src || 'the fund’s own filing'}
+      — summarised automatically. Analysis, not investment advice.</p>
+    <div class="fs-ask">
+      <input id="fsq-${esc(sym)}" type="text" maxlength="500"
+             placeholder="Ask about this fact sheet — e.g. what are the risks?" />
+      <button class="fs-ask-btn" data-sym="${esc(sym)}">Ask</button>
+    </div>
+    <div class="fs-answers" id="fsa-${esc(sym)}"></div>`;
+}
+
+async function _loadFactsheet(sym, attempt) {
+  const panel = document.getElementById('ffs-' + sym);
+  if (!panel) return;
+  attempt = attempt || 0;
+  if (!attempt) panel.innerHTML = '<div class="loading">Opening the fact sheet…</div>';
+
+  try {
+    const d = await getJSON(`/api/funds/${encodeURIComponent(sym)}/factsheet`);
+
+    if (d.status === 'ready') {
+      panel.innerHTML = _fsRender(sym, d);
+      const btn = panel.querySelector('.fs-ask-btn');
+      const input = panel.querySelector(`#fsq-${CSS.escape(sym)}`);
+      if (btn) btn.addEventListener('click', () => _askFactsheet(sym));
+      if (input) input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') _askFactsheet(sym);
+      });
+      return;
+    }
+
+    if (d.status === 'unavailable') {
+      panel.innerHTML = `<div class="empty">${esc((d.notes || []).join(' ') ||
+        'No source document is available for this fund.')}</div>`;
+      return;
+    }
+
+    if (attempt >= _FS_MAX_POLLS) {
+      panel.innerHTML = `<div class="empty">Still working on this one —
+        close and reopen the fact sheet in a minute.</div>`;
+      // Clear the fetch-once flag, or reopening does nothing and the advice
+      // above is a dead end.
+      delete panel.dataset.loaded;
+      return;
+    }
+    panel.innerHTML = `<div class="loading">${esc(_FS_PROGRESS[d.status] || 'Working…')}</div>`;
+    setTimeout(() => _loadFactsheet(sym, attempt + 1), 12000);
+  } catch (e) {
+    panel.innerHTML = `<div class="empty">Could not load the fact sheet: ${esc(e.message)}</div>`;
+  }
+}
+
+async function _askFactsheet(sym) {
+  const input = document.getElementById('fsq-' + sym);
+  const out = document.getElementById('fsa-' + sym);
+  if (!input || !out) return;
+  const q = input.value.trim();
+  if (!q) return;
+  input.value = '';
+
+  const row = document.createElement('div');
+  row.className = 'fs-qa';
+  row.innerHTML = `<p class="fs-q">${esc(q)}</p><p class="fs-a loading">Reading the filing…</p>`;
+  out.appendChild(row);
+
+  try {
+    const r = await postJSON(`/api/funds/${encodeURIComponent(sym)}/factsheet/ask`,
+                             { question: q });
+    const cites = (r.citations || []).map(c =>
+      `<a class="fs-cite" href="${esc(c.url)}" target="_blank" rel="noopener"
+          title="${esc([c.form_type, c.heading].filter(Boolean).join(' · '))}">[${c.n}]</a>`).join(' ');
+    row.querySelector('.fs-a').outerHTML =
+      `<p class="fs-a">${esc(r.answer)}</p>` +
+      (cites ? `<p class="fs-cites muted">Sources: ${cites}</p>` : '');
+  } catch (e) {
+    row.querySelector('.fs-a').outerHTML =
+      `<p class="fs-a muted">Could not answer that: ${esc(e.message)}</p>`;
+  }
+}
+
+function _toggleFactsheet(sym) {
+  const panel = document.getElementById('ffs-' + sym);
+  if (!panel) return;
+  const open = panel.style.display !== 'none';
+  panel.style.display = open ? 'none' : 'block';
+  if (!open && !panel.dataset.loaded) {
+    panel.dataset.loaded = '1';
+    _loadFactsheet(sym, 0);
+  }
 }
 
 async function _loadDrivers(sym, period, isRetry) {
@@ -1404,6 +1554,8 @@ async function loadFunds() {
     btn.addEventListener('click', () => _toggleFundDetail(btn.dataset.sym)));
   $('#content').querySelectorAll('.fund-rm').forEach(btn =>
     btn.addEventListener('click', () => _removeFund(btn.dataset.sym)));
+  $('#content').querySelectorAll('.fund-fs').forEach(btn =>
+    btn.addEventListener('click', () => _toggleFactsheet(btn.dataset.sym)));
 }
 
 // Wire funds into the view system
@@ -1651,11 +1803,47 @@ function _getRecentSearches() {
   try { return JSON.parse(localStorage.getItem(_RECENT_KEY) || '[]'); }
   catch (e) { return []; }
 }
-function _rememberSearch(sym, name) {
+function _rememberSearch(sym, name, type) {
   if (!sym) return;
   const list = _getRecentSearches().filter((r) => r.symbol !== sym);
-  list.unshift({ symbol: sym, name: name || '' });
+  // Keep the type: without it a fund picked from recents would route to the
+  // stock view, which is exactly what the type field exists to prevent.
+  list.unshift({ symbol: sym, name: name || '', type: type || 'stock' });
   try { localStorage.setItem(_RECENT_KEY, JSON.stringify(list.slice(0, 8))); } catch (e) {}
+}
+
+// A mutual fund has no meaningful stock detail page, so it always goes to the
+// Funds tab. An ETF trades like a stock and has a perfectly good overview, so
+// it only goes to Funds when the user actually tracks it — otherwise routing it
+// there would dead-end on a status line instead of showing anything.
+function openSearchResult(sym, type) {
+  if (type === 'fund') { openFundSymbol(sym, true); return; }
+  if (type === 'etf')  { openFundSymbol(sym, false); return; }
+  openSymbol(sym);
+}
+
+async function openFundSymbol(sym, fallbackToAddBox) {
+  view = 'funds';
+  document.querySelectorAll('.tab').forEach(t =>
+    t.classList.toggle('active', t.dataset.view === 'funds'));
+  try { await loadFunds(); } catch (e) { /* handled by the missing-card path below */ }
+
+  const card = document.getElementById('fc-' + sym);
+  if (card) {
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    _toggleFactsheet(sym);
+    return;
+  }
+  if (!fallbackToAddBox) {
+    openSymbol(sym);   // tradeable and untracked — the stock view still helps
+    return;
+  }
+  // Not tracked: prefill the add box rather than silently doing nothing, since
+  // the fact sheet lives on the fund card.
+  const st = document.getElementById('status');
+  if (st) st.textContent = `Add ${sym} to your funds to see its fact sheet.`;
+  const input = document.getElementById('fundSymInput');
+  if (input) { input.value = sym; input.focus(); }
 }
 
 (function initGlobalSearch() {
@@ -1669,17 +1857,23 @@ function _rememberSearch(sym, name) {
   function renderHits(hits, label) {
     if (!hits.length) { close(); return; }
     const heading = label ? `<div class="search-drop-label">${esc(label)}</div>` : '';
-    drop.innerHTML = heading + hits.map((r) => `
-      <button class="search-hit" data-sym="${esc(r.symbol)}" data-name="${esc(r.name || '')}">
+    drop.innerHTML = heading + hits.map((r) => {
+      const t = r.type || 'stock';
+      const pill = (t === 'fund' || t === 'etf')
+        ? `<span class="hit-type">${t === 'fund' ? 'Fund' : 'ETF'}</span>` : '';
+      return `
+      <button class="search-hit" data-sym="${esc(r.symbol)}" data-name="${esc(r.name || '')}"
+              data-type="${esc(t)}">
         <span class="sym">${esc(r.symbol)}</span>
-        <span class="nm">${esc(r.name || '')}</span></button>`).join('');
+        <span class="nm">${esc(r.name || '')}</span>${pill}</button>`;
+    }).join('');
     drop.classList.add('open');
     drop.querySelectorAll('.search-hit').forEach((b) =>
       b.addEventListener('mousedown', (e) => {
         e.preventDefault();
-        _rememberSearch(b.dataset.sym, b.dataset.name);
+        _rememberSearch(b.dataset.sym, b.dataset.name, b.dataset.type);
         close(); inp.value = '';
-        openSymbol(b.dataset.sym);
+        openSearchResult(b.dataset.sym, b.dataset.type);
       }));
   }
 
@@ -1712,8 +1906,12 @@ function _rememberSearch(sym, name) {
       e.preventDefault();
       const first = drop.querySelector('.search-hit');
       if (first) {
-        _rememberSearch(first.dataset.sym, first.dataset.name);
-        close(); inp.value = ''; openSymbol(first.dataset.sym);
+        // Mirror the mousedown handler above: route by type, or a keyboard
+        // Enter on a fund/ETF result dead-ends on the stock detail view while
+        // the identical mouse click correctly opens the Funds tab.
+        _rememberSearch(first.dataset.sym, first.dataset.name, first.dataset.type);
+        close(); inp.value = '';
+        openSearchResult(first.dataset.sym, first.dataset.type);
       }
     }
   });

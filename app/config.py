@@ -32,6 +32,21 @@ class Settings(BaseSettings):
     # Storage
     recommendations_db_path: str = "./data/recommendations.db"
 
+    # Where FAISS fund-document indexes live. Must point at the SAME persistent
+    # volume as the DB in production — a relative path lands on the container's
+    # ephemeral filesystem and every index is lost on redeploy.
+    fund_index_dir: str = "./data/fund_index"
+
+    # Fact-sheet ingest bounds. A full statutory prospectus is 50-200 pages;
+    # these keep one fund's ingest from exhausting a small container's CPU and
+    # memory (the embedding step is the expensive part).
+    factsheet_max_chunks: int = 1500
+    factsheet_max_doc_bytes: int = 4_000_000
+
+    # Share of the daily AI call budget kept in reserve for everything else, so
+    # fact-sheet generation can't starve the chat assistant.
+    factsheet_llm_reserve_pct: float = 0.2
+
     # Outcome validation horizon (days a target has to be hit)
     outcome_horizon_days: int = 365
 

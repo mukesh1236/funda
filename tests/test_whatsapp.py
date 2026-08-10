@@ -71,13 +71,29 @@ def test_extract_code_is_strict():
 
 
 # ── webhook routing (via TestClient; no Twilio auth token → sig check skipped) ──
-def _client():
+def _client(tmp_path, monkeypatch):
+    """Isolated app: patches BOTH app.main.store and app.whatsapp.webhook._store
+    onto one private tmp_path database.
+
+    Those are two separate RecommendationStore instances that happen to point
+    at the same file by default (app/main.py's `store` for auth/session
+    routes, app/whatsapp/webhook.py's own `_store` for link-code/webhook
+    routes) — without patching both, this test suite hits the real,
+    un-isolated dev DB shared across the whole pytest run, which is what
+    caused an intermittent FOREIGN KEY failure here in CI.
+    """
+    import app.main as main_mod
+    import app.whatsapp.webhook as webhook_mod
     from app.main import app
+
+    store = RecommendationStore(str(tmp_path / "wa_web.db"))
+    monkeypatch.setattr(main_mod, "store", store)
+    monkeypatch.setattr(webhook_mod, "_store", store)
     return TestClient(app)
 
 
-def test_webhook_unlinked_phone_gets_link_instructions():
-    c = _client()
+def test_webhook_unlinked_phone_gets_link_instructions(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
     r = c.post("/api/whatsapp/webhook",
                data={"From": "whatsapp:+14155550100", "Body": "top buys"})
     assert r.status_code == 200
@@ -85,13 +101,10 @@ def test_webhook_unlinked_phone_gets_link_instructions():
     assert "code" in r.text.lower()
 
 
-def test_webhook_full_link_then_ask_then_stop():
-    import uuid
-    c = _client()
-    email = f"flow2-{uuid.uuid4().hex[:8]}@t.com"   # unique per run: this hits the
-    # real dev DB (webhook.py owns its own store instance), so a fixed email
-    # would 409 as "already registered" on a second run of the suite.
-    c.post("/api/auth/register", json={"email": email, "password": "longpass123"})
+def test_webhook_full_link_then_ask_then_stop(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    # A fresh, private DB per test — no collision risk, so a plain email is fine.
+    c.post("/api/auth/register", json={"email": "flow2@t.com", "password": "longpass123"})
     code = c.post("/api/whatsapp/link-code").json()["code"]
     phone = "whatsapp:+14155550101"
 
@@ -106,8 +119,8 @@ def test_webhook_full_link_then_ask_then_stop():
     assert "unsubscribed" in stopped.text
 
 
-def test_link_code_endpoint_requires_auth():
-    c = _client()
+def test_link_code_endpoint_requires_auth(tmp_path, monkeypatch):
+    _client(tmp_path, monkeypatch)   # installs the isolated store for this test
     # fresh client with no cookie
     from app.main import app
     with TestClient(app) as anon:
@@ -120,7 +133,7 @@ def test_bad_twilio_signature_rejected(tmp_path, monkeypatch):
     rejected (403)."""
     import app.whatsapp.webhook as wh
     monkeypatch.setattr(wh._settings, "twilio_auth_token", "secrettoken")
-    c = _client()
+    c = _client(tmp_path, monkeypatch)
     r = c.post("/api/whatsapp/webhook",
                data={"From": "whatsapp:+14155550102", "Body": "hi"},
                headers={"X-Twilio-Signature": "wrong"})
@@ -138,7 +151,7 @@ def test_valid_twilio_signature_accepted(tmp_path, monkeypatch):
         hmac.new(token.encode(), payload.encode(), hashlib.sha1).digest()
     ).decode()
 
-    c = _client()
+    c = _client(tmp_path, monkeypatch)
     r = c.post("/api/whatsapp/webhook", data=params, headers={"X-Twilio-Signature": sig})
     assert r.status_code == 200   # signature verified → routed normally
 
