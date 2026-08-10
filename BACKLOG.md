@@ -25,6 +25,7 @@ notes; this table is the actionable summary. Ranked by severity.
 | S9 | **Unpinned dependencies** | 🟡 Medium | `requirements.txt` uses `>=` only, no upper bounds/lockfile — every deploy can silently pull a new major version. Pin exact versions; run `pip-audit` in the existing CI workflow. |
 | S10 | **No CSRF token (defense-in-depth)** | 🟢 Low | `SameSite=Lax` blocks cross-site POST in modern browsers (acceptable baseline), but a CSRF token on state-changing admin/account routes is standard hardening for a financial-data app. |
 | S11 | **`esc()` (web/app.js) doesn't escape `'`** | 🟢 Low | No live exploit found (only ever used with server-validated ticker symbols today), but a latent trap if a future feature reuses the inline-`onclick` pattern with free text. Prefer the `data-*` + `addEventListener` pattern already used in newer code. |
+| S12 | **No rate limit on `POST /api/chat` or `POST /api/funds/{symbol}/factsheet/ask`** | 🟡 Medium | Both are public, unauthenticated, and call the LLM on every request — a scripted loop can exhaust `AI_DAILY_CALL_BUDGET` for every legitimate user. `refresh_factsheet` already caps at 1/hour/symbol (`app/funds.py`); apply the same TTLCache pattern to these two. Not a new gap introduced by the fact-sheet feature — `/api/chat` had it first — but the fact-sheet PR is a natural point to close both together. |
 
 Explicitly checked, no issue found: SQL is parameterized everywhere in
 `store.py` (no string-built queries); password strength IS enforced

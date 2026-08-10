@@ -252,6 +252,24 @@ def _number_is_supported(token: str, pool: set) -> bool:
     return False
 
 
+def _build_number_pool(facts: dict, excerpts: List[dict]) -> set:
+    pool = _facts_number_pool(facts)
+    for e in excerpts:
+        pool.update(_numbers_in(e["text"]))
+    return pool
+
+
+def find_unsupported_numbers(text: str, facts: dict, excerpts: List[dict]) -> List[str]:
+    """Numeric tokens in `text` that appear in neither FACTS nor an excerpt.
+
+    Shared by the summary validator and the free-text ask endpoint — both need
+    the same guarantee (every number traces to real data, never to the model's
+    own arithmetic), and this is the one place that guarantee is checked.
+    """
+    pool = _build_number_pool(facts, excerpts)
+    return [n for n in _numbers_in(text) if not _number_is_supported(n, pool)]
+
+
 def validate_summary(parsed: dict, facts: dict, excerpts: List[dict]) -> Tuple[dict, List[str]]:
     """Drop anything the model wasn't entitled to say. Returns (clean, notes).
 
@@ -260,9 +278,7 @@ def validate_summary(parsed: dict, facts: dict, excerpts: List[dict]) -> Tuple[d
     finance product is the failure that matters most here.
     """
     notes: List[str] = []
-    pool = _facts_number_pool(facts)
-    for e in excerpts:
-        pool.update(_numbers_in(e["text"]))
+    pool = _build_number_pool(facts, excerpts)
     valid_cites = {str(i + 1) for i in range(len(excerpts))}
 
     clean_sections = []

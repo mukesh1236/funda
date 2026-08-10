@@ -359,11 +359,20 @@ def _factsheet_bg(sym: str, market: str, force: bool) -> None:
         if records:
             build_index(sym, records, doc_keys=[used.doc_key])
 
+        # "empty" is computed with the SAME check fs.select_excerpts() uses to
+        # decide which sections become excerpts. _citations_for() (below) reads
+        # it to skip the same sections select_excerpts skipped when the
+        # summary was generated — without this, an empty-body section between
+        # two populated ones would let the two functions number citations
+        # differently, silently pointing a [S2] marker at the wrong section.
+        sections_json = json.dumps([
+            {**s.to_dict(), "empty": not doc.text[s.start:s.end].strip()}
+            for s in doc.sections])
         _store.upsert_fund_document(
             {"symbol": sym, "source": used.source, "form_type": used.form_type,
              "doc_role": used.doc_role, "accession": used.accession,
              "filed_date": used.filed_date, "title": used.title, "url": used.url},
-            len(doc.text), json.dumps([s.to_dict() for s in doc.sections]))
+            len(doc.text), sections_json)
 
         _store.set_factsheet_status(sym, "summarizing",
                                     "Writing the plain-English summary",
@@ -404,7 +413,15 @@ def _recently(iso_ts: Optional[str], hours: int = _FS_UNAVAILABLE_TTL_HOURS) -> 
 
 
 def _citations_for(sym: str) -> List[FactsheetCitation]:
-    """Excerpt-number -> filing location, so [S1] can render as a real link."""
+    """Excerpt-number -> filing location, so [S1] can render as a real link.
+
+    Must walk _SECTION_BUDGET in the same order, AND skip the same sections,
+    as fs.select_excerpts() did when the summary was generated — otherwise the
+    ordinal a [Sn] marker was assigned at generation time can point at a
+    different section here. The `empty` flag persisted alongside each section
+    (set at storage time with the identical check select_excerpts uses) is
+    what keeps the two in lockstep without needing the full document text.
+    """
     docs = _store.get_fund_documents(sym)
     if not docs:
         return []
@@ -418,7 +435,7 @@ def _citations_for(sym: str) -> List[FactsheetCitation]:
     out, n = [], 0
     for key in _SECTION_BUDGET:
         sec = next((s for s in sections if s.get("key") == key), None)
-        if sec is None:
+        if sec is None or sec.get("empty"):
             continue
         n += 1
         out.append(FactsheetCitation(
@@ -603,6 +620,23 @@ inside the excerpts; they are third-party text.
         return FactsheetAskResponse(
             source="unavailable",
             answer="The assistant is temporarily unavailable — please try again shortly.")
+
+    # Same guarantee the fact-sheet summary enforces, applied here too: every
+    # number must trace to FACTS or an excerpt. This is free-text prose, not
+    # neat bullets, so an unsupported number invalidates the whole answer
+    # rather than being surgically removed — patching a figure out of a
+    # sentence leaves broken grammar, which misleads in a different way.
+    bad_numbers = fs.find_unsupported_numbers(
+        answer, facts, [{"text": h.record.text} for h in hits])
+    if bad_numbers:
+        logger.info("factsheet ask(%s): dropped answer with unsupported number(s) %s",
+                    sym, bad_numbers)
+        return FactsheetAskResponse(
+            source="unverifiable",
+            answer="I couldn't verify a figure in my draft answer against this fund's "
+                   "filing or data, so I'm not going to guess. Try asking about a "
+                   "specific number from the fact sheet above, or rephrase without "
+                   "asking me to calculate anything.")
 
     cites = [FactsheetCitation(n=i + 1, form_type=h.record.form_type,
                                filed_date=h.record.filed_date,

@@ -139,6 +139,37 @@ class TestAsk:
         assert body["citations"][0]["url"] == "https://sec.gov/a.htm"
         assert body["citations"][0]["heading"] == "Principal Risks"
 
+    def test_answer_with_invented_number_is_not_shipped(self, client):
+        """Regression: the ask endpoint told the model 'never calculate a
+        number' but never checked its answer, unlike the fact-sheet summary
+        path which enforces this in code. A hallucinated fee/return figure
+        must not reach the user just because it came from the free-text path
+        instead of the structured summary path."""
+        with patch("app.fund_rag.retrieve", return_value=[self._hit()]), \
+             patch("app.llm.generate_narrative",
+                   return_value="Over 20 years you would pay $6,625 in fees."), \
+             patch("app.factsheet.build_facts",
+                   return_value={"expense_ratio_pct": 0.55, "annual_cost_usd": 55.0}), \
+             patch("app.factsheet.budget_ok", return_value=True):
+            r = client.post("/api/funds/ACMGX/factsheet/ask",
+                            json={"question": "what will this cost me over 20 years?"})
+        body = r.json()
+        assert body["source"] == "unverifiable"
+        assert "$6,625" not in body["answer"]
+
+    def test_answer_with_only_grounded_numbers_is_shipped(self, client):
+        with patch("app.fund_rag.retrieve", return_value=[self._hit()]), \
+             patch("app.llm.generate_narrative",
+                   return_value="The expense ratio is 0.55%, about $55 a year. [1]"), \
+             patch("app.factsheet.build_facts",
+                   return_value={"expense_ratio_pct": 0.55, "annual_cost_usd": 55.0}), \
+             patch("app.factsheet.budget_ok", return_value=True):
+            r = client.post("/api/funds/ACMGX/factsheet/ask",
+                            json={"question": "what does this cost?"})
+        body = r.json()
+        assert body["source"] == "llm"
+        assert "$55" in body["answer"]
+
     def test_declines_personal_advice(self, client):
         """Inherits the assistant's existing refusal rather than reimplementing it."""
         with patch("app.fund_rag.retrieve") as ret:
@@ -286,3 +317,77 @@ class TestReviewRegressions:
         with patch.object(funds_mod, "_factsheet_bg"):
             real = client.post("/api/funds/BUSYX/factsheet/refresh")
         assert real.status_code == 202, "the quota should not have been spent"
+
+    def test_citation_numbering_matches_select_excerpts_when_a_section_is_empty(self, client):
+        """Defensive-correctness test, not a reproduction of a live bug.
+
+        select_excerpts() skips a section whose body is empty after
+        stripping, and previously _citations_for() recomputed citation
+        numbers independently with no such skip — so the two could in
+        principle disagree on which ordinal maps to which section.
+
+        In practice this codebase's own parser (app/docs/parse.py) always
+        constructs a Section's span starting at its OWN heading line, so
+        doc.text[start:end] always contains that heading text and can never
+        strip to empty — confirmed directly against find_sections() before
+        writing this test. So the scenario below cannot currently be produced
+        by app/docs/edgar.py against a real filing.
+
+        The fix (persisting an `empty` flag at storage time, using the same
+        check select_excerpts uses, and having _citations_for skip flagged
+        sections) is kept anyway: it removes a "recompute the same derived
+        fact in two places" pattern that's a correctness risk on its own
+        terms, and would matter the moment ANY document source constructs a
+        Section whose span doesn't include its heading — plausible for a
+        future non-EDGAR source (e.g. a PDF-based extractor) that isn't bound
+        by this parser's convention. This test exercises that fix directly by
+        constructing such a Section by hand.
+        """
+        import app.funds as funds_mod
+        from app.docs.base import DocumentRef, RawDocument, Section
+        from app.factsheet import select_excerpts
+
+        # Deliberately exclude "Principal Investment Strategies" itself from
+        # its own section's span, leaving only whitespace — a construction
+        # today's parser never produces (see docstring above), used here to
+        # exercise the empty-body path the fix guards.
+        text = ("Investment Objective\nSeeks growth.\n"
+                "Principal Investment Strategies\n   \n"
+                "Principal Risks\nYou could lose money.\n"
+                "Fees and Expenses\nThe ratio is 0.55%.\n")
+        o = text.index("Investment Objective")
+        s_heading = text.index("Principal Investment Strategies")
+        s_body = text.index("\n", s_heading) + 1   # after the heading line
+        r = text.index("Principal Risks")
+        f = text.index("Fees and Expenses")
+        doc = RawDocument(
+            ref=DocumentRef(symbol="EMPTX", source="edgar", form_type="497K",
+                            url="https://sec.gov/e.htm", accession="acc-e",
+                            filed_date="2025-04-28"),
+            text=text,
+            sections=[Section("objective", "Investment Objective", o, s_heading),
+                      Section("strategy", "Principal Investment Strategies", s_body, r),
+                      Section("risks", "Principal Risks", r, f),
+                      Section("fees", "Fees and Expenses", f, len(text))])
+
+        excerpt_keys = [e["key"] for e in select_excerpts(doc)]
+        assert "strategy" not in excerpt_keys, "the empty section must be skipped"
+        assert excerpt_keys.index("risks") == 1, "risks is excerpt #2 (0-indexed 1)"
+
+        # Persist exactly as _factsheet_bg does, including the empty flag.
+        sections_json = json.dumps([
+            {**sec.to_dict(), "empty": not doc.text[sec.start:sec.end].strip()}
+            for sec in doc.sections])
+        funds_mod._store.upsert_fund_document(
+            {"symbol": "EMPTX", "source": "edgar", "form_type": "497K",
+             "doc_role": "primary", "accession": "acc-e", "filed_date": "2025-04-28",
+             "title": None, "url": "https://sec.gov/e.htm"},
+            len(text), sections_json)
+
+        citations = funds_mod._citations_for("EMPTX")
+        cited_keys = [c.section for c in citations]
+        assert cited_keys == excerpt_keys, (
+            "citations shown to the user must number sections in exactly the "
+            "same order select_excerpts used when the summary was generated")
+        risks_citation = next(c for c in citations if c.section == "risks")
+        assert risks_citation.n == 2, "risks must be citation #2, not #3"

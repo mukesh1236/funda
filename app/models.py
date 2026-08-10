@@ -637,5 +637,6 @@ class FactsheetAskRequest(BaseModel):
 class FactsheetAskResponse(BaseModel):
     answer: str
     citations: List[FactsheetCitation] = []
-    # llm | no-context | out-of-scope | advice-declined | budget_exhausted | unavailable
+    # llm | no-context | out-of-scope | advice-declined | budget_exhausted
+    # | unavailable | unverifiable
     source: str

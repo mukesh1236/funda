@@ -1906,8 +1906,12 @@ async function openFundSymbol(sym, fallbackToAddBox) {
       e.preventDefault();
       const first = drop.querySelector('.search-hit');
       if (first) {
-        _rememberSearch(first.dataset.sym, first.dataset.name);
-        close(); inp.value = ''; openSymbol(first.dataset.sym);
+        // Mirror the mousedown handler above: route by type, or a keyboard
+        // Enter on a fund/ETF result dead-ends on the stock detail view while
+        // the identical mouse click correctly opens the Funds tab.
+        _rememberSearch(first.dataset.sym, first.dataset.name, first.dataset.type);
+        close(); inp.value = '';
+        openSearchResult(first.dataset.sym, first.dataset.type);
       }
     }
   });

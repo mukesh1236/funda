@@ -324,3 +324,31 @@ class TestNumericProvenanceRegressions:
         done = next(s for s in clean["sections"] if s["key"] == "how_its_done")
         assert done["bullets"][0]["text"] == "Not disclosed in the source document."
         assert notes
+
+
+class TestFindUnsupportedNumbers:
+    """The helper the /factsheet/ask endpoint (app/funds.py) now uses to apply
+    the same numeric-provenance guarantee to free-text answers that
+    validate_summary already applies to the structured summary."""
+
+    def test_grounded_numbers_pass(self):
+        from app.factsheet import find_unsupported_numbers
+        facts = {"expense_ratio_pct": 0.55, "annual_cost_usd": 55.0}
+        excerpts = [{"text": "A fee waiver expires in 2026."}]
+        bad = find_unsupported_numbers(
+            "The ratio is 0.55%, about $55 a year. Waiver ends 2026.", facts, excerpts)
+        assert bad == []
+
+    def test_invented_number_is_flagged(self):
+        from app.factsheet import find_unsupported_numbers
+        facts = {"expense_ratio_pct": 0.55}
+        bad = find_unsupported_numbers(
+            "Over the fund's life you would pay $6,625 in fees.", facts, [])
+        assert "$6,625" in bad
+
+    def test_shares_the_numeric_comparison_with_validate_summary(self):
+        """Must accept "$55" against a FACTS value of 55.0 the same way the
+        summary path does — a text-only comparison would reject this."""
+        from app.factsheet import find_unsupported_numbers
+        facts = {"annual_cost_usd": 55.0}
+        assert find_unsupported_numbers("It costs about $55 a year.", facts, []) == []
