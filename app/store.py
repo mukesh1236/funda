@@ -174,6 +174,51 @@ CREATE TABLE IF NOT EXISTS fund_portfolio (
     added_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(user_id, symbol)
 );
+
+-- Fund disclosure documents located from a country service (SEC EDGAR today,
+-- AMFI/AMC later). One row per filing we actually used; `accession` is the
+-- stable identity that keys the generated summary, so a fact sheet is only
+-- regenerated when the fund files something new.
+CREATE TABLE IF NOT EXISTS fund_documents (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol      TEXT NOT NULL COLLATE NOCASE,
+    source      TEXT NOT NULL,                    -- 'edgar' | 'amfi' | 'amc'
+    form_type   TEXT NOT NULL,                    -- '497K' | '497' | '485BPOS' | 'N-CSR'
+    doc_role    TEXT NOT NULL DEFAULT 'primary',  -- 'primary' | 'commentary'
+    accession   TEXT,
+    filed_date  TEXT,
+    period_date TEXT,
+    title       TEXT,
+    url         TEXT NOT NULL,
+    char_count  INTEGER,
+    sections    TEXT,                             -- JSON [{key,heading,start,end}]
+    fetched_at  TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fund_docs_uniq
+    ON fund_documents(symbol, source, IFNULL(accession, ''), url);
+CREATE INDEX IF NOT EXISTS idx_fund_docs_sym ON fund_documents(symbol);
+
+-- Generated plain-English fact sheets, keyed on the document they summarise.
+CREATE TABLE IF NOT EXISTS fund_factsheets (
+    symbol       TEXT NOT NULL COLLATE NOCASE,
+    doc_key      TEXT NOT NULL,     -- accession, or the URL when there is none
+    schema_ver   INTEGER NOT NULL DEFAULT 1,
+    summary_json TEXT NOT NULL,
+    model        TEXT,
+    generated_at TEXT NOT NULL,
+    PRIMARY KEY (symbol, doc_key, schema_ver)
+);
+
+-- Ingest progress for the polling UI. One row per fund, overwritten in place.
+CREATE TABLE IF NOT EXISTS fund_factsheet_status (
+    symbol      TEXT PRIMARY KEY COLLATE NOCASE,
+    state       TEXT NOT NULL,     -- queued|fetching|parsing|indexing|summarizing|ready|unavailable|budget_exhausted
+    detail      TEXT,
+    doc_key     TEXT,
+    chunk_count INTEGER,
+    error       TEXT,
+    updated_at  TEXT NOT NULL
+);
 """
 
 
@@ -839,6 +884,106 @@ class RecommendationStore:
                 cusips,
             ).fetchall()
         return {r["cusip"]: r["ticker"] for r in rows}
+
+    # ── fund documents / fact sheets ─────────────────────────────────────────
+    def upsert_fund_document(self, ref: dict, char_count: int,
+                             sections_json: str) -> None:
+        """Record a disclosure document we fetched and used for `symbol`."""
+        with _write_lock, self._connect() as conn:
+            conn.execute(
+                """INSERT INTO fund_documents
+                       (symbol, source, form_type, doc_role, accession, filed_date,
+                        period_date, title, url, char_count, sections, fetched_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(symbol, source, IFNULL(accession, ''), url)
+                   DO UPDATE SET char_count = excluded.char_count,
+                                 sections   = excluded.sections,
+                                 filed_date = excluded.filed_date,
+                                 title      = excluded.title,
+                                 fetched_at = excluded.fetched_at""",
+                (ref["symbol"].upper().strip(), ref["source"], ref["form_type"],
+                 ref.get("doc_role") or "primary", ref.get("accession"),
+                 ref.get("filed_date"), ref.get("period_date"), ref.get("title"),
+                 ref["url"], char_count, sections_json,
+                 datetime.now(timezone.utc).isoformat(timespec="seconds")),
+            )
+
+    def get_fund_documents(self, symbol: str) -> List[dict]:
+        """Documents recorded for a fund, newest filing first."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM fund_documents WHERE symbol = ? "
+                "ORDER BY IFNULL(filed_date, '') DESC",
+                (symbol.upper().strip(),),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_fund_documents(self, symbol: str) -> None:
+        with _write_lock, self._connect() as conn:
+            conn.execute("DELETE FROM fund_documents WHERE symbol = ?",
+                         (symbol.upper().strip(),))
+
+    def get_factsheet(self, symbol: str, doc_key: str,
+                      schema_ver: int = 1) -> Optional[dict]:
+        """Cached summary for exactly this document version, or None."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM fund_factsheets WHERE symbol = ? AND doc_key = ? "
+                "AND schema_ver = ?",
+                (symbol.upper().strip(), doc_key, schema_ver),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def latest_factsheet(self, symbol: str) -> Optional[dict]:
+        """Most recent cached summary for a fund regardless of document version.
+        Used to serve something honest when the AI budget is exhausted."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM fund_factsheets WHERE symbol = ? "
+                "ORDER BY generated_at DESC LIMIT 1",
+                (symbol.upper().strip(),),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def save_factsheet(self, symbol: str, doc_key: str, summary_json: str,
+                       model: Optional[str], schema_ver: int = 1) -> None:
+        with _write_lock, self._connect() as conn:
+            conn.execute(
+                """INSERT INTO fund_factsheets
+                       (symbol, doc_key, schema_ver, summary_json, model, generated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(symbol, doc_key, schema_ver)
+                   DO UPDATE SET summary_json = excluded.summary_json,
+                                 model        = excluded.model,
+                                 generated_at = excluded.generated_at""",
+                (symbol.upper().strip(), doc_key, schema_ver, summary_json, model,
+                 datetime.now(timezone.utc).isoformat(timespec="seconds")),
+            )
+
+    def set_factsheet_status(self, symbol: str, state: str, detail: str = "",
+                             doc_key: Optional[str] = None,
+                             chunk_count: Optional[int] = None,
+                             error: Optional[str] = None) -> None:
+        with _write_lock, self._connect() as conn:
+            conn.execute(
+                """INSERT INTO fund_factsheet_status
+                       (symbol, state, detail, doc_key, chunk_count, error, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(symbol) DO UPDATE SET
+                       state = excluded.state, detail = excluded.detail,
+                       doc_key = excluded.doc_key, chunk_count = excluded.chunk_count,
+                       error = excluded.error, updated_at = excluded.updated_at""",
+                (symbol.upper().strip(), state, detail, doc_key, chunk_count, error,
+                 datetime.now(timezone.utc).isoformat(timespec="seconds")),
+            )
+
+    def get_factsheet_status(self, symbol: str) -> Optional[dict]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM fund_factsheet_status WHERE symbol = ?",
+                (symbol.upper().strip(),),
+            ).fetchone()
+        return dict(row) if row else None
 
     def outcome_counts(self, symbol: str) -> dict:
         """{status: count} of resolved outcomes for a symbol — feeds hit-rate."""

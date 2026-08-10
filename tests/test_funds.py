@@ -211,8 +211,10 @@ class TestFundRAG:
             rag_mod._model()
         except Exception as e:
             pytest.skip(f"embedding model unavailable in this environment: {e}")
-        # Redirect index storage to tmp dir
-        monkeypatch.setattr(rag_mod, "_INDEX_DIR", tmp_path)
+        # Redirect index storage to tmp dir (patch the resolver, not a constant —
+        # the path is read from settings on every call so it can point at the
+        # mounted volume in production).
+        monkeypatch.setattr(rag_mod, "_index_dir", lambda: tmp_path)
         # Clear in-memory cache
         rag_mod._cache.clear()
 

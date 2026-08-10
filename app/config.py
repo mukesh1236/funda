@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # Storage
     recommendations_db_path: str = "./data/recommendations.db"
 
+    # Where FAISS fund-document indexes live. Must point at the SAME persistent
+    # volume as the DB in production — a relative path lands on the container's
+    # ephemeral filesystem and every index is lost on redeploy.
+    fund_index_dir: str = "./data/fund_index"
+
     # Outcome validation horizon (days a target has to be hit)
     outcome_horizon_days: int = 365
 

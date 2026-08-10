@@ -21,13 +21,24 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-_INDEX_DIR = Path("data/fund_index")
 _WORDS_PER_CHUNK = 80
 _CHUNK_STRIDE = 60        # overlap = 80 - 60 = 20 words
 _EMBED_MODEL = "all-MiniLM-L6-v2"
 
 _lock = threading.Lock()
 _cache: Dict[str, Tuple] = {}   # sym -> (faiss_index, chunks)
+
+
+def _index_dir() -> Path:
+    """Root directory for FAISS indexes, read from settings on every call.
+
+    Deliberately not captured at import time: tests monkeypatch this to a
+    tmp_path, and in production it must resolve to the mounted volume
+    (FUND_INDEX_DIR=/data/fund_index) rather than a path relative to the cwd.
+    """
+    from app.config import get_settings
+
+    return Path(get_settings().fund_index_dir)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -99,14 +110,6 @@ def _synthesize(symbol: str) -> str:
         )
         parts.append(f"Top holdings: {h_text}.")
 
-    if expense is not None:
-        parts.append(
-            f"The annual expense ratio of {expense}% means that over 20 years on a $10,000 "
-            f"investment (assuming 7% annual return), fees cost approximately "
-            f"${int(10000 * ((1.07 ** 20) - (1.06 ** 20 if expense < 1 else 1.07 ** 20))):.0f} "
-            f"in lost compounding."
-        )
-
     parts.append(
         f"{name} is a {category or 'diversified'} fund that provides exposure to a broad "
         f"portfolio of securities. Investors use it for long-term wealth building."
@@ -119,7 +122,7 @@ def _synthesize(symbol: str) -> str:
 
 def fund_index_exists(symbol: str) -> bool:
     sym = symbol.upper().strip()
-    return (_INDEX_DIR / sym / "index.faiss").exists()
+    return (_index_dir() / sym / "index.faiss").exists()
 
 
 def ingest_fund_docs(symbol: str) -> bool:
@@ -143,7 +146,7 @@ def ingest_fund_docs(symbol: str) -> bool:
         index = faiss.IndexFlatIP(dim)
         index.add(embeddings)
 
-        idx_dir = _INDEX_DIR / sym
+        idx_dir = _index_dir() / sym
         idx_dir.mkdir(parents=True, exist_ok=True)
         faiss.write_index(index, str(idx_dir / "index.faiss"))
         (idx_dir / "chunks.json").write_text(
@@ -175,8 +178,9 @@ def query_fund_docs(symbol: str, question: str, k: int = 4) -> str:
             entry = _cache.get(sym)
 
         if entry is None:
-            idx_file = _INDEX_DIR / sym / "index.faiss"
-            chunks_file = _INDEX_DIR / sym / "chunks.json"
+            base = _index_dir() / sym
+            idx_file = base / "index.faiss"
+            chunks_file = base / "chunks.json"
             if not idx_file.exists():
                 return ""
             index = faiss.read_index(str(idx_file))

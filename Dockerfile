@@ -26,6 +26,9 @@ COPY scripts/ ./scripts/
 # Persistent data directory — mount a Railway Volume at /data
 RUN mkdir -p /data
 ENV RECOMMENDATIONS_DB_PATH=/data/recommendations.db
+# FAISS fund-document indexes must live on the same volume as the DB, or they
+# are rebuilt from scratch after every redeploy.
+ENV FUND_INDEX_DIR=/data/fund_index
 
 # Railway (and most PaaS) injects PORT at runtime
 ENV PORT=8100
