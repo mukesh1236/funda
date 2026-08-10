@@ -95,7 +95,21 @@ def _yahoo_quotes_with_fallback(query: str, count: int = 12) -> List[dict]:
     return _yahoo_quotes(query, count, fuzzy=True)
 
 
-def _parse_quotes(quotes: List[dict], market: str, limit: int) -> List[dict]:
+# Yahoo quoteType -> the type the frontend routes on. Without this the UI can't
+# tell a fund from a stock and sends both to the stock detail view.
+_RESULT_TYPES = {
+    "EQUITY": "stock",
+    "ETF": "etf",
+    "MUTUALFUND": "fund",
+    "INDEX": "index",
+    "CURRENCY": "other",
+    "CRYPTOCURRENCY": "other",
+}
+_TYPE_RANK = {"stock": 0, "etf": 1, "index": 2, "fund": 3, "other": 4}
+
+
+def _parse_quotes(quotes: List[dict], market: str, limit: int,
+                  include_funds: bool = True) -> List[dict]:
     results = []
     seen = set()
     for item in quotes:
@@ -107,16 +121,24 @@ def _parse_quotes(quotes: List[dict], market: str, limit: int) -> List[dict]:
             continue
         if market == "us" and is_india:
             continue
-        kind = item.get("quoteType", "")
-        if kind in ("MUTUALFUND", "FUTURE", "OPTION"):
+        kind = (item.get("quoteType") or "").upper()
+        if kind in ("FUTURE", "OPTION"):
+            continue
+        if kind == "MUTUALFUND" and not include_funds:
             continue
         seen.add(sym)
         name = item.get("shortname") or item.get("longname") or sym
         exchange = item.get("exchange") or item.get("fullExchangeName") or ""
-        results.append({"symbol": sym, "name": name, "exchange": exchange})
-        if len(results) >= limit:
+        results.append({"symbol": sym, "name": name, "exchange": exchange,
+                        "type": _RESULT_TYPES.get(kind, "stock")})
+        if len(results) >= limit * 3:
+            # Over-collect so ranking has something to work with, then trim.
             break
-    return results
+
+    # Stocks and ETFs first. A query like "fidelity" otherwise returns a dozen
+    # share classes of the same mutual fund and buries everything else.
+    results.sort(key=lambda r: _TYPE_RANK.get(r["type"], 3))
+    return results[:limit]
 
 
 def _static_india_matches(q_lower: str, limit: int) -> List[dict]:
@@ -127,19 +149,30 @@ def _static_india_matches(q_lower: str, limit: int) -> List[dict]:
         if any(kw in q_lower for kw in keywords):
             if sym not in seen:
                 seen.add(sym)
-                results.append({"symbol": sym, "name": name, "exchange": "NSE"})
+                results.append({"symbol": sym, "name": name, "exchange": "NSE",
+                                "type": "stock"})
                 if len(results) >= limit:
                     break
     return results
 
 
-def search_tickers(query: str, market: str = "us", limit: int = 6) -> List[dict]:
-    """Search by company name or partial ticker. Returns [{symbol, name, exchange}].
-    India market: tries static name mapping first, then Yahoo Finance search."""
+def search_tickers(query: str, market: str = "us", limit: int = 6,
+                   include_funds: bool = True) -> List[dict]:
+    """Search by company name or partial ticker.
+
+    Returns [{symbol, name, exchange, type}] where type is
+    stock | etf | fund | index | other.
+
+    `include_funds=False` for callers that can't act on a mutual fund — the
+    watchlist pins an entry price and tracks daily moves, which a fund with one
+    NAV per day can't support.
+
+    India market: tries static name mapping first, then Yahoo Finance search.
+    """
     q = query.strip()
     if len(q) < 1:
         return []
-    cache_key = f"{q.lower()}:{market}"
+    cache_key = f"{q.lower()}:{market}:{int(include_funds)}"
     if cache_key in _CACHE:
         return _CACHE[cache_key]
 
@@ -153,14 +186,14 @@ def search_tickers(query: str, market: str = "us", limit: int = 6) -> List[dict]
         # Fill remaining slots from Yahoo search (strict phrase-match, then
         # fuzzy fallback — see _yahoo_quotes_with_fallback).
         quotes = _yahoo_quotes_with_fallback(q)
-        yahoo = _parse_quotes(quotes, market, limit - len(results))
+        yahoo = _parse_quotes(quotes, market, limit - len(results), include_funds)
         seen = {r["symbol"] for r in results}
         results += [r for r in yahoo if r["symbol"] not in seen]
 
     # India final fallback: retry Yahoo with " NSE" for short queries.
     if market == "in" and not results and len(q) <= 20:
         quotes2 = _yahoo_quotes_with_fallback(q + " NSE")
-        results = _parse_quotes(quotes2, market, limit)
+        results = _parse_quotes(quotes2, market, limit, include_funds)
 
     # Only cache HITS. Caching an empty result for the full hour would
     # memorize a transient failure (timeout, rate limit) or an over-strict

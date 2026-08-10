@@ -609,7 +609,9 @@ async function loadWatchlist() {
     if (q.length < 2) { drop.innerHTML = ''; drop.classList.remove('open'); return; }
     _wlSearchTimer = setTimeout(async () => {
       try {
-        const res = await getJSON(`/api/search?q=${encodeURIComponent(q)}&market=${currentMarket()}`);
+        // No mutual funds here: the watchlist pins an entry price and tracks
+        // the daily move, which a once-daily NAV can't support.
+        const res = await getJSON(`/api/search?q=${encodeURIComponent(q)}&market=${currentMarket()}&include_funds=false`);
         const hits = res.results || [];
         if (!hits.length) { drop.innerHTML = ''; drop.classList.remove('open'); return; }
         drop.innerHTML = hits.map(h =>
@@ -1798,11 +1800,43 @@ function _getRecentSearches() {
   try { return JSON.parse(localStorage.getItem(_RECENT_KEY) || '[]'); }
   catch (e) { return []; }
 }
-function _rememberSearch(sym, name) {
+function _rememberSearch(sym, name, type) {
   if (!sym) return;
   const list = _getRecentSearches().filter((r) => r.symbol !== sym);
-  list.unshift({ symbol: sym, name: name || '' });
+  // Keep the type: without it a fund picked from recents would route to the
+  // stock view, which is exactly what the type field exists to prevent.
+  list.unshift({ symbol: sym, name: name || '', type: type || 'stock' });
   try { localStorage.setItem(_RECENT_KEY, JSON.stringify(list.slice(0, 8))); } catch (e) {}
+}
+
+// Mutual funds and ETFs belong in the Funds tab, where the fact sheet lives.
+// Everything else goes to the stock detail view.
+function openSearchResult(sym, type) {
+  if (type === 'fund' || type === 'etf') {
+    openFundSymbol(sym);
+    return;
+  }
+  openSymbol(sym);
+}
+
+async function openFundSymbol(sym) {
+  view = 'funds';
+  document.querySelectorAll('.tab').forEach(t =>
+    t.classList.toggle('active', t.dataset.view === 'funds'));
+  try { await loadFunds(); } catch (e) { /* handled below by the missing-card path */ }
+
+  const card = document.getElementById('fc-' + sym);
+  if (card) {
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    _toggleFactsheet(sym);
+    return;
+  }
+  // Not in the user's portfolio: prefill the add box rather than silently
+  // doing nothing, since the fact sheet lives on the fund card.
+  const st = document.getElementById('status');
+  if (st) st.textContent = `Add ${sym} to your funds to see its fact sheet.`;
+  const input = document.getElementById('fundSymInput');
+  if (input) { input.value = sym; input.focus(); }
 }
 
 (function initGlobalSearch() {
@@ -1816,17 +1850,23 @@ function _rememberSearch(sym, name) {
   function renderHits(hits, label) {
     if (!hits.length) { close(); return; }
     const heading = label ? `<div class="search-drop-label">${esc(label)}</div>` : '';
-    drop.innerHTML = heading + hits.map((r) => `
-      <button class="search-hit" data-sym="${esc(r.symbol)}" data-name="${esc(r.name || '')}">
+    drop.innerHTML = heading + hits.map((r) => {
+      const t = r.type || 'stock';
+      const pill = (t === 'fund' || t === 'etf')
+        ? `<span class="hit-type">${t === 'fund' ? 'Fund' : 'ETF'}</span>` : '';
+      return `
+      <button class="search-hit" data-sym="${esc(r.symbol)}" data-name="${esc(r.name || '')}"
+              data-type="${esc(t)}">
         <span class="sym">${esc(r.symbol)}</span>
-        <span class="nm">${esc(r.name || '')}</span></button>`).join('');
+        <span class="nm">${esc(r.name || '')}</span>${pill}</button>`;
+    }).join('');
     drop.classList.add('open');
     drop.querySelectorAll('.search-hit').forEach((b) =>
       b.addEventListener('mousedown', (e) => {
         e.preventDefault();
-        _rememberSearch(b.dataset.sym, b.dataset.name);
+        _rememberSearch(b.dataset.sym, b.dataset.name, b.dataset.type);
         close(); inp.value = '';
-        openSymbol(b.dataset.sym);
+        openSearchResult(b.dataset.sym, b.dataset.type);
       }));
   }
 

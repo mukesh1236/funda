@@ -138,6 +138,12 @@ h4, h5 { margin: 0 0 8px; }
 .search-hit:hover { background: var(--bg-glass-2); }
 .search-hit .sym { font-weight: 700; color: var(--accent); min-width: 52px; }
 .search-hit .nm  { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Marks results that open the Funds tab rather than the stock detail view. */
+.search-hit .hit-type {
+  margin-left: auto; flex: none; font-size: 10px; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px;
+}
 .search-drop-label {
   padding: 7px 12px 4px; font-size: 10px; text-transform: uppercase;
   letter-spacing: 0.07em; color: var(--muted); font-weight: 700;
