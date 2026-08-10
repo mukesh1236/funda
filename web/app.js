@@ -1166,6 +1166,8 @@ function _fundCard(f) {
           ${m.category ? `<span class="fund-cat">${esc(m.category)}</span>` : ''}
         </div>
         <div class="fund-card-actions">
+          <button class="fund-fs" data-sym="${esc(f.symbol)}"
+                  title="Plain-English summary of this fund's official filing">📄 Fact sheet</button>
           ${rmBtn}
         </div>
       </div>
@@ -1176,9 +1178,152 @@ function _fundCard(f) {
         <div class="fund-metric"><div class="fm-val">${_cagr(m.cagr_5y)}</div><div class="fm-lbl">5Y CAGR</div></div>
         <div class="fund-metric"><div class="fm-val">${_cagr(m.since_inception_cagr)}</div><div class="fm-lbl">Since inception</div></div>
       </div>
+      <div class="fund-fs-panel" id="ffs-${esc(f.symbol)}" style="display:none"></div>
       <button class="fund-detail-btn" data-sym="${esc(f.symbol)}">Details ▾</button>
       <div class="fund-detail-panel" id="fdp-${esc(f.symbol)}" style="display:none"></div>
     </div>`;
+}
+
+// ── Fact sheet ────────────────────────────────────────────────────────────────
+
+// Backend stage -> what the user is actually waiting for. Building a fact sheet
+// takes 30-90s, and a static spinner that long reads as broken.
+const _FS_PROGRESS = {
+  queued:      'Queued…',
+  fetching:    "Finding the fund's official filing…",
+  parsing:     'Reading the prospectus…',
+  indexing:    'Indexing the filing…',
+  summarizing: 'Writing the plain-English summary…',
+};
+// _loadDrivers polls forever; this doesn't. Ingest can legitimately fail, and
+// an endless poll is a silent battery and quota drain on an abandoned tab.
+const _FS_MAX_POLLS = 10;
+
+function _fsCiteLink(cite, citations) {
+  if (!cite) return '';
+  const n = parseInt(String(cite).replace(/^S/, ''), 10);
+  const c = (citations || []).find(x => x.n === n);
+  if (!c) return '';
+  const label = [c.form_type, c.heading].filter(Boolean).join(' · ');
+  return ` <a class="fs-cite" href="${esc(c.url)}" target="_blank" rel="noopener"
+             title="${esc(label)}">[${n}]</a>`;
+}
+
+function _fsRender(sym, d) {
+  const s = d.summary || {};
+  const sections = (s.sections || []).map((sec, i) => `
+    <details class="fs-section" ${i < 2 ? 'open' : ''}>
+      <summary>${esc(sec.title)}</summary>
+      <ul>${(sec.bullets || []).map(b =>
+        `<li>${esc(b.text)}${_fsCiteLink(b.cite, d.citations)}</li>`).join('')}</ul>
+    </details>`).join('');
+
+  const jargon = (s.jargon || []).length ? `
+    <details class="fs-jargon">
+      <summary>Jargon, in plain English (${s.jargon.length})</summary>
+      <dl>${s.jargon.map(j =>
+        `<dt>${esc(j.term)}</dt><dd>${esc(j.plain)}</dd>`).join('')}</dl>
+    </details>` : '';
+
+  // Provenance is never optional: a summary without the filing it came from
+  // is just an assertion.
+  const src = (d.documents || []).map(doc =>
+    `<a href="${esc(doc.url)}" target="_blank" rel="noopener">${esc(doc.form_type)}</a>${
+      doc.filed_date ? ' filed ' + esc(doc.filed_date) : ''}`).join(' · ');
+
+  const notes = (d.notes || []).length
+    ? `<p class="fs-notes muted">${esc(d.notes.join(' '))}</p>` : '';
+
+  return `
+    <p class="fs-headline">${esc(s.headline || '')}</p>
+    ${sections}
+    ${jargon}
+    ${notes}
+    <p class="fs-source muted">Source: ${src || 'the fund’s own filing'}
+      — summarised automatically. Analysis, not investment advice.</p>
+    <div class="fs-ask">
+      <input id="fsq-${esc(sym)}" type="text" maxlength="500"
+             placeholder="Ask about this fact sheet — e.g. what are the risks?" />
+      <button class="fs-ask-btn" data-sym="${esc(sym)}">Ask</button>
+    </div>
+    <div class="fs-answers" id="fsa-${esc(sym)}"></div>`;
+}
+
+async function _loadFactsheet(sym, attempt) {
+  const panel = document.getElementById('ffs-' + sym);
+  if (!panel) return;
+  attempt = attempt || 0;
+  if (!attempt) panel.innerHTML = '<div class="loading">Opening the fact sheet…</div>';
+
+  try {
+    const d = await getJSON(`/api/funds/${encodeURIComponent(sym)}/factsheet`);
+
+    if (d.status === 'ready') {
+      panel.innerHTML = _fsRender(sym, d);
+      const btn = panel.querySelector('.fs-ask-btn');
+      const input = panel.querySelector(`#fsq-${CSS.escape(sym)}`);
+      if (btn) btn.addEventListener('click', () => _askFactsheet(sym));
+      if (input) input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') _askFactsheet(sym);
+      });
+      return;
+    }
+
+    if (d.status === 'unavailable') {
+      panel.innerHTML = `<div class="empty">${esc((d.notes || []).join(' ') ||
+        'No source document is available for this fund.')}</div>`;
+      return;
+    }
+
+    if (attempt >= _FS_MAX_POLLS) {
+      panel.innerHTML = `<div class="empty">Still working on this one —
+        close and reopen the fact sheet in a minute.</div>`;
+      return;
+    }
+    panel.innerHTML = `<div class="loading">${esc(_FS_PROGRESS[d.status] || 'Working…')}</div>`;
+    setTimeout(() => _loadFactsheet(sym, attempt + 1), 12000);
+  } catch (e) {
+    panel.innerHTML = `<div class="empty">Could not load the fact sheet: ${esc(e.message)}</div>`;
+  }
+}
+
+async function _askFactsheet(sym) {
+  const input = document.getElementById('fsq-' + sym);
+  const out = document.getElementById('fsa-' + sym);
+  if (!input || !out) return;
+  const q = input.value.trim();
+  if (!q) return;
+  input.value = '';
+
+  const row = document.createElement('div');
+  row.className = 'fs-qa';
+  row.innerHTML = `<p class="fs-q">${esc(q)}</p><p class="fs-a loading">Reading the filing…</p>`;
+  out.appendChild(row);
+
+  try {
+    const r = await postJSON(`/api/funds/${encodeURIComponent(sym)}/factsheet/ask`,
+                             { question: q });
+    const cites = (r.citations || []).map(c =>
+      `<a class="fs-cite" href="${esc(c.url)}" target="_blank" rel="noopener"
+          title="${esc([c.form_type, c.heading].filter(Boolean).join(' · '))}">[${c.n}]</a>`).join(' ');
+    row.querySelector('.fs-a').outerHTML =
+      `<p class="fs-a">${esc(r.answer)}</p>` +
+      (cites ? `<p class="fs-cites muted">Sources: ${cites}</p>` : '');
+  } catch (e) {
+    row.querySelector('.fs-a').outerHTML =
+      `<p class="fs-a muted">Could not answer that: ${esc(e.message)}</p>`;
+  }
+}
+
+function _toggleFactsheet(sym) {
+  const panel = document.getElementById('ffs-' + sym);
+  if (!panel) return;
+  const open = panel.style.display !== 'none';
+  panel.style.display = open ? 'none' : 'block';
+  if (!open && !panel.dataset.loaded) {
+    panel.dataset.loaded = '1';
+    _loadFactsheet(sym, 0);
+  }
 }
 
 async function _loadDrivers(sym, period, isRetry) {
@@ -1404,6 +1549,8 @@ async function loadFunds() {
     btn.addEventListener('click', () => _toggleFundDetail(btn.dataset.sym)));
   $('#content').querySelectorAll('.fund-rm').forEach(btn =>
     btn.addEventListener('click', () => _removeFund(btn.dataset.sym)));
+  $('#content').querySelectorAll('.fund-fs').forEach(btn =>
+    btn.addEventListener('click', () => _toggleFactsheet(btn.dataset.sym)));
 }
 
 // Wire funds into the view system

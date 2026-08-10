@@ -379,7 +379,61 @@ td .caret { margin-right: 6px; }
 .fund-cat { font-size: 11px; color: var(--muted); }
 .fund-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 14px; margin: 8px 0; }
 .fund-metric, .fund-stat { display: flex; justify-content: space-between; font-size: 12.5px; }
-.fund-card-actions { display: flex; gap: 8px; margin-top: 10px; }
+.fund-card-actions { display: flex; gap: 8px; margin-top: 10px; margin-left: auto; }
+
+/* ── fact sheet ─────────────────────────────────────────────────────────── */
+.fund-fs {
+  background: var(--accent-soft); border: 1px solid var(--border-hi);
+  color: var(--text); font-size: 11.5px; padding: 3px 9px;
+  border-radius: 7px; cursor: pointer; white-space: nowrap;
+}
+.fund-fs:hover { background: var(--accent); border-color: var(--accent); }
+.fund-fs-panel {
+  margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px;
+  font-size: 12.5px;
+}
+.fs-headline { font-weight: 600; color: var(--text); margin: 0 0 10px; line-height: 1.45; }
+.fs-section { border-top: 1px solid var(--border); padding: 6px 0; }
+.fs-section > summary,
+.fs-jargon > summary {
+  cursor: pointer; font-weight: 600; color: var(--text-2);
+  font-size: 12px; padding: 3px 0; list-style: none;
+}
+.fs-section > summary::-webkit-details-marker,
+.fs-jargon > summary::-webkit-details-marker { display: none; }
+.fs-section > summary::before,
+.fs-jargon > summary::before { content: '▸ '; color: var(--muted); }
+.fs-section[open] > summary::before,
+.fs-jargon[open] > summary::before { content: '▾ '; }
+.fs-section ul { margin: 4px 0 6px; padding-left: 18px; }
+.fs-section li { margin: 4px 0; line-height: 1.5; color: var(--text-2); }
+.fs-cite {
+  color: var(--accent); text-decoration: none; font-size: 10.5px;
+  vertical-align: super;
+}
+.fs-cite:hover { text-decoration: underline; }
+.fs-jargon { border-top: 1px solid var(--border); padding: 6px 0; }
+.fs-jargon dl { margin: 4px 0; }
+.fs-jargon dt { font-weight: 600; color: var(--text-2); font-size: 12px; margin-top: 6px; }
+.fs-jargon dd { margin: 2px 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.fs-notes, .fs-source { font-size: 11px; margin: 8px 0 0; line-height: 1.45; }
+.fs-source a { color: var(--accent); text-decoration: none; }
+.fs-source a:hover { text-decoration: underline; }
+.fs-ask { display: flex; gap: 6px; margin-top: 12px; }
+.fs-ask input {
+  flex: 1; background: var(--bg-inset); border: 1px solid var(--border);
+  color: var(--text); border-radius: 7px; padding: 6px 9px; font-size: 12px;
+}
+.fs-ask input:focus { outline: none; border-color: var(--accent); }
+.fs-ask-btn {
+  background: var(--accent); border: none; color: #fff; font-size: 12px;
+  padding: 6px 12px; border-radius: 7px; cursor: pointer;
+}
+.fs-answers { margin-top: 8px; }
+.fs-qa { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
+.fs-q { font-weight: 600; color: var(--text-2); margin: 0 0 4px; font-size: 12px; }
+.fs-a { margin: 0; color: var(--text-2); line-height: 1.5; white-space: pre-wrap; }
+.fs-cites { font-size: 11px; margin: 4px 0 0; }
 .fund-detail-panel { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
 .fund-detail-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 /* return drivers (Pareto) */
