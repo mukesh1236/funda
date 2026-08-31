@@ -14,7 +14,13 @@ returns nothing instead of the nearest paragraph. It also caps how many chunks
 one section may contribute, so a ten-paragraph risk section cannot crowd out
 the one paragraph that answers a question about fees.
 
-Everything degrades to False / [] when faiss-cpu or sentence-transformers are
+Embeddings run through ONNX (fastembed), not PyTorch. Same all-MiniLM-L6-v2
+weights, but the torch build of this one feature held ~717 MB resident for the
+life of the process — seven times the rest of the app — and pulled 2.7 GB of
+CUDA libraries into a container with no GPU. On a per-GB-month host that single
+dependency was most of the hosting bill. See _embedder() below.
+
+Everything degrades to False / [] when faiss-cpu or the embedding backend are
 missing, matching the rest of the project's fail-soft convention.
 """
 import json
@@ -34,7 +40,13 @@ logger = logging.getLogger(__name__)
 # whose meta.json is missing or older is treated as absent and rebuilt.
 SCHEMA_VERSION = 2
 
+# Recorded in meta.json as the index's embedding identity. Deliberately kept at
+# the bare name the sentence-transformers backend used to write: the ONNX
+# backend runs the same weights, so existing on-disk indexes stay valid and
+# changing this string would silently invalidate every one of them.
 _EMBED_MODEL = "all-MiniLM-L6-v2"
+# The same model as fastembed's catalogue spells it.
+_FASTEMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 # ~250 words is about one coherent risk factor or strategy paragraph. The old
 # 80-word window was sized for a 180-word synthesized blurb and produces
@@ -115,16 +127,31 @@ def _limits() -> Tuple[int, int]:
 
 
 @lru_cache(maxsize=1)
-def _model():
-    """Load the embedding model once per process — constructing
-    SentenceTransformer per call costs seconds of disk load each time."""
-    from sentence_transformers import SentenceTransformer
-    return SentenceTransformer(_EMBED_MODEL)
+def _embedder():
+    """Load the ONNX embedding model once per process.
+
+    Measured RSS of the two backends for the *same* MiniLM weights:
+    sentence-transformers/torch 717 MB, fastembed/onnxruntime ~87 MB. Because
+    _embedder is lru_cached, whichever one is chosen stays resident for the
+    process lifetime — so this choice is paid 24/7, not per request.
+
+    The weights are identical, so vectors stay compatible with indexes built by
+    the old backend and nothing on disk needs rebuilding.
+    """
+    from fastembed import TextEmbedding
+    return TextEmbedding(_FASTEMBED_MODEL)
 
 
 def _embed(texts: List[str]):
-    return _model().encode(texts, normalize_embeddings=True,
-                           show_progress_bar=False, batch_size=32)
+    import numpy as np
+
+    vecs = np.asarray(list(_embedder().embed(list(texts))), dtype="float32")
+    # IndexFlatIP is only cosine similarity on unit vectors, and _DEFAULT_MIN_SCORE
+    # is a cosine floor. fastembed already normalises MiniLM output, so this is a
+    # no-op — but it makes the invariant the retrieval maths depends on hold here
+    # rather than resting on a backend default that could change under us.
+    norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+    return vecs / np.maximum(norms, 1e-12)
 
 
 # ── chunking ──────────────────────────────────────────────────────────────────

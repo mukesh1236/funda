@@ -209,7 +209,7 @@ class TestFundRAG:
         directly rather than mocking app.fund_data.
         """
         pytest.importorskip("faiss", reason="faiss-cpu not installed")
-        pytest.importorskip("sentence_transformers", reason="sentence-transformers not installed")
+        pytest.importorskip("fastembed", reason="fastembed not installed")
 
         import app.fund_rag as rag_mod
         try:  # model weights must be downloadable (offline/proxied CI can't)

@@ -98,9 +98,16 @@ _RESPONSE_CACHE: TTLCache = TTLCache(maxsize=128, ttl=60)
 
 
 def _warm_feed_caches():
-    """Pre-fetch the feed for both markets so no user request ever pays the
-    cold yfinance day-change download. Runs on the scheduler every 4 minutes
-    (inside the day-change cache's 5-minute TTL)."""
+    """Pre-fetch the feed for both markets so most user requests skip the cold
+    yfinance day-change download.
+
+    Runs every 30 minutes, NOT inside the day-change cache's 5-minute TTL. At
+    the old 4-minute cadence this fired 720 times a day across both markets,
+    which kept the container permanently busy — on a per-vCPU-minute host that
+    was a large share of the hosting bill, spent mostly on warming a cache
+    nobody was about to read. The trade is that the first dashboard load after
+    a quiet spell pays one cold fetch.
+    """
     for m in ("us", "in"):
         try:
             build_feed(store, days=1, market=m)
@@ -128,17 +135,20 @@ async def lifespan(app: FastAPI):
                 replace_existing=True,
             )
             from apscheduler.triggers.interval import IntervalTrigger
-            _scheduler.add_job(
-                _warm_feed_caches,
-                IntervalTrigger(minutes=4),
-                id="warm_feed_caches",
-                replace_existing=True,
-                next_run_time=datetime.now(),  # warm immediately on startup
-            )
+            # 0 disables warming — the feed is still built on demand, the first
+            # request after a quiet spell just pays the cold fetch.
+            if settings.warm_feed_interval_minutes > 0:
+                _scheduler.add_job(
+                    _warm_feed_caches,
+                    IntervalTrigger(minutes=settings.warm_feed_interval_minutes),
+                    id="warm_feed_caches",
+                    replace_existing=True,
+                    next_run_time=datetime.now(),  # warm immediately on startup
+                )
             from app.alerts import check_alerts
             _scheduler.add_job(
                 lambda: check_alerts(store, settings),
-                IntervalTrigger(minutes=15),
+                IntervalTrigger(minutes=max(1, settings.alert_check_interval_minutes)),
                 id="threshold_alerts",
                 replace_existing=True,
             )

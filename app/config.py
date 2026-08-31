@@ -131,6 +131,15 @@ class Settings(BaseSettings):
     # Admin bootstrap — this email is promoted to role="admin" on first startup.
     admin_email: str = ""
 
+    # ── background job cadence (hosting cost) ─────────────────────────────────
+    # These two intervals decide how much CPU the container burns while idle,
+    # which on a usage-billed host is real money. Warming the feed every 4
+    # minutes meant 720 yfinance batch downloads a day and a process that never
+    # went quiet. Lower them for a snappier cold dashboard, raise them to spend
+    # less; set the warm interval to 0 to disable warming entirely.
+    warm_feed_interval_minutes: int = 30
+    alert_check_interval_minutes: int = 60
+
     # ── SRE / AI observability ────────────────────────────────────────────────
     # Daily AI budgets for the burn gauge + preemptive alerts. Defaults match
     # OpenRouter's free tier without credits (~50 free-model requests/day).

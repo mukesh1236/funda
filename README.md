@@ -68,9 +68,11 @@ Standalone project — no dependency on other apps.
   holdings with an honest coverage label when N‑PORT data isn't available.
   Large funds compute in the background (`status: "computing"` while the UI
   polls) and cache the result for 24h.
-- **Fund RAG**: fund docs/holdings are chunked, embedded
-  (`sentence-transformers`), and indexed with FAISS (`app/fund_rag.py`) so
-  Ask AI can answer fund-specific questions grounded in the fund's own data.
+- **Fund RAG**: fund docs/holdings are chunked, embedded (`all-MiniLM-L6-v2`
+  via ONNX/`fastembed` — same weights as the sentence-transformers build at a
+  fraction of the memory, which matters on a usage-billed host), and indexed
+  with FAISS (`app/fund_rag.py`) so Ask AI can answer fund-specific questions
+  grounded in the fund's own data.
 
 ### Ask AI (chat)
 - **Shared brain** (`app/chat.py::answer_question` / `answer_question_stream`)

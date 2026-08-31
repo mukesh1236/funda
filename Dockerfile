@@ -29,6 +29,9 @@ ENV RECOMMENDATIONS_DB_PATH=/data/recommendations.db
 # FAISS fund-document indexes must live on the same volume as the DB, or they
 # are rebuilt from scratch after every redeploy.
 ENV FUND_INDEX_DIR=/data/fund_index
+# Same reasoning for the ONNX embedding weights: cache them on the volume so
+# they are downloaded once, not on every container start.
+ENV FASTEMBED_CACHE_PATH=/data/fastembed
 
 # Railway (and most PaaS) injects PORT at runtime
 ENV PORT=8100

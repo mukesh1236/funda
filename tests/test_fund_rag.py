@@ -230,3 +230,57 @@ class TestIngest:
         assert rag.ingest_fund_docs("TF") is True
         hits = rag.retrieve("TF", "risk of losing money")
         assert hits and hits[0].record.accession == "acc-9"
+
+
+class TestEmbeddingBackend:
+    """The ONNX backend swap (sentence-transformers → fastembed).
+
+    These tests stub the *backend* rather than _embed itself, so the real
+    _embed body — the part that guarantees the invariant IndexFlatIP depends
+    on — is the code under test. No model download is needed.
+    """
+
+    def test_embed_normalises_to_unit_vectors(self, monkeypatch):
+        """IndexFlatIP is cosine similarity ONLY on unit vectors, and the
+        min_score floor is a cosine floor. If a backend ever returns
+        un-normalised output, every score silently changes scale and the floor
+        stops meaning what it says."""
+        class Backend:
+            def embed(self, texts):
+                # Deliberately un-normalised, and a different magnitude per row.
+                return [np.array([3.0, 4.0], dtype="float32") * (i + 1)
+                        for i, _ in enumerate(texts)]
+
+        monkeypatch.setattr(rag, "_embedder", lambda: Backend())
+        out = rag._embed(["a", "b"])
+        norms = np.linalg.norm(out, axis=1)
+        assert np.allclose(norms, 1.0), norms
+        # Direction preserved: 3-4-5 triangle → (0.6, 0.8) for both rows.
+        assert np.allclose(out[0], [0.6, 0.8])
+        assert np.allclose(out[1], [0.6, 0.8])
+
+    def test_embed_returns_float32_for_faiss(self, monkeypatch):
+        """faiss rejects float64 — build_index calls .astype('float32') but
+        retrieve relies on _embed already being right."""
+        class Backend:
+            def embed(self, texts):
+                return [np.array([1.0, 0.0], dtype="float64") for _ in texts]
+
+        monkeypatch.setattr(rag, "_embedder", lambda: Backend())
+        assert rag._embed(["a"]).dtype == np.float32
+
+    def test_zero_vector_does_not_divide_by_zero(self, monkeypatch):
+        class Backend:
+            def embed(self, texts):
+                return [np.zeros(3, dtype="float32") for _ in texts]
+
+        monkeypatch.setattr(rag, "_embedder", lambda: Backend())
+        out = rag._embed(["a"])
+        assert np.all(np.isfinite(out))
+
+    def test_index_identity_unchanged_by_the_backend_swap(self):
+        """meta.json records the embedding identity, and _read_meta treats a
+        mismatch as a rebuild trigger. The ONNX backend runs the same weights,
+        so this string must NOT drift — changing it would invalidate every
+        index already on the deployed volume."""
+        assert rag._EMBED_MODEL == "all-MiniLM-L6-v2"

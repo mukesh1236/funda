@@ -14,4 +14,9 @@ itsdangerous>=2.1
 sentry-sdk[fastapi]>=2.0
 pytest>=8.0
 faiss-cpu>=1.8
-sentence-transformers>=3.0
+# Imported directly by app/fund_rag.py (it arrived transitively before).
+numpy>=1.26
+# ONNX embeddings rather than sentence-transformers: same all-MiniLM-L6-v2
+# weights, but sentence-transformers pulls PyTorch (+2.7 GB of CUDA libraries
+# for a GPU we don't have) and holds ~717 MB resident instead of ~87 MB.
+fastembed>=0.4
