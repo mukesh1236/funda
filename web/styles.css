@@ -810,3 +810,30 @@ td .caret { margin-right: 6px; }
   color: var(--text); border-radius: 8px; padding: 4px 8px; font-size: 12px;
 }
 .fund-amt:focus { outline: none; border-color: var(--accent); }
+
+/* ── Market facts during waits ───────────────────────────────────────────── */
+/* Tokens only, per the UI design rules in CLAUDE.md. */
+.loading-msg { color: var(--muted); }
+.loading-fact {
+  display: flex; align-items: baseline; justify-content: center;
+  gap: var(--sp-4); flex-wrap: wrap;
+  max-width: 52ch; margin: var(--sp-5) auto 0; padding: var(--sp-4) var(--sp-5);
+  background: var(--bg-inset); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-meta); color: var(--text-2); line-height: 1.55;
+  text-align: left;
+}
+.fact-text::before {
+  content: '💡'; margin-right: var(--sp-3); opacity: 0.9;
+}
+.fact-hide {
+  flex-shrink: 0; background: none; border: none; padding: 0;
+  color: var(--muted); font-size: var(--fs-micro); cursor: pointer;
+  text-decoration: underline;
+}
+.fact-hide:hover { color: var(--text-2); }
+.facts-toggle.off { opacity: 0.45; }
+@media (prefers-reduced-motion: no-preference) {
+  .loading-fact { animation: fact-in 0.25s ease-out; }
+  @keyframes fact-in { from { opacity: 0; } to { opacity: 1; } }
+}

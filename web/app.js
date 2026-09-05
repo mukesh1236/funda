@@ -48,6 +48,159 @@ async function postJSON(path, body, method) {
   return res.json();
 }
 
+// ── Market facts during waits ────────────────────────────────────────────────
+// The slow paths here are network-bound and not optimisable away: SEC EDGAR
+// fetches, N-PORT downloads, LLM calls. Filling that wait with something true
+// and relevant turns dead time into a moment of learning.
+//
+// Two rules hold this together:
+//   1. A fact NEVER delays a result. It appears only once a wait has already
+//      passed _FACT_DELAY_MS; anything quicker renders with no fact at all,
+//      because a fact that flashes up and vanishes is worse than none.
+//   2. Facts are hand-written and verifiable — structural, regulatory and
+//      definitional truths, never performance statistics and never generated.
+//      A wrong "fun fact" on a financial product is the same failure as a
+//      fabricated number, just in friendlier clothing.
+
+const _FACTS_KEY = 'facts_enabled';
+const _FACT_DELAY_MS = 600;      // below this a fact would flash and vanish
+const _FACT_ROTATE_MS = 6000;    // fact sheets run 30s+, so one is not enough
+
+const FACTS = {
+  factsheet: [
+    "Form 497K is the SEC's Summary Prospectus — the short version every US mutual fund must publish alongside the full one.",
+    'A prospectus must state objective, strategy, risks and fees, in that order. The SEC prescribes the headings, which is why they all read alike.',
+    'Form 485BPOS is the annual update a fund files to keep its registration current — it carries the full prospectus with it.',
+    "An N-CSR is a fund's certified shareholder report, filed twice a year and signed by an officer of the fund.",
+    "Funds must describe their principal risks specifically — a generic “markets can fall” paragraph doesn't satisfy the rule.",
+    'Performance shown in a fund document is after fees, so the chart already has costs taken out of it.',
+  ],
+  holdings: [
+    'Every US mutual fund files its complete portfolio with the SEC four times a year, on Form N-PORT.',
+    'Funds disclose their top-10 holdings far more often than the full portfolio — which is why estimates built on top-10 data understate overlap.',
+    'An index fund must disclose the index it tracks, and cannot quietly stray from it.',
+    'A total-market fund can hold thousands of companies and still have a fifth of its money in the largest ten.',
+    'N-PORT weights are reported as a percentage of net assets, and rounding means a full list rarely sums to exactly 100.',
+  ],
+  xray: [
+    'Two S&P 500 index funds from different providers hold essentially the same companies — the difference is nearly all fee and tracking.',
+    'Holding three funds is not the same as being diversified across three things: they can own the same companies underneath.',
+    'Every US mutual fund files its complete portfolio with the SEC four times a year, on Form N-PORT.',
+    'Overlap is about weight, not names: two funds can share most of their holdings but very little of your money.',
+    'A fee paid on duplicated exposure buys nothing extra — you own the position already, through the other fund.',
+  ],
+  drivers: [
+    'A market-cap-weighted fund puts more money into a company as it grows, so returns concentrate over time without anyone rebalancing.',
+    "Weight and contribution are different things: a small position that doubles can outrun a large one that drifts sideways.",
+    'Cap-weighted indexes are rebalanced by the market itself — the weights move whenever prices do.',
+  ],
+  compare: [
+    'One basis point is 0.01%. Fund fees are usually quoted in them, so "4 bps" means 0.04%.',
+    "A fund's expense ratio is deducted from NAV daily, which is why the fee never appears as a charge on a statement.",
+    'Two funds tracking the same index can still return differently, through fees, sampling, and how they handle dividends.',
+  ],
+  stock: [
+    'An analyst price target is a 12-month view, not a forecast for tomorrow.',
+    "A company's fiscal year doesn't have to match the calendar, which is why “Q1” means different months at different companies.",
+    'US companies file results on Form 10-Q each quarter and Form 10-K once a year — the 10-K carries the full risk disclosures.',
+    'Market capitalisation is share price times shares outstanding, so buybacks move it even when the price does not.',
+  ],
+  analysts: [
+    'Research analysts must disclose whether their firm does banking business with the company they cover.',
+    'A consensus rating is an average of individual views — it hides how much the analysts disagree.',
+    'Analysts revise price targets far more often than they change ratings, so the number moves even when the label does not.',
+  ],
+  default: [
+    'One basis point is 0.01% — fund fees are usually quoted in them.',
+    "A fund's expense ratio is deducted from NAV daily, so you never see it charged on a statement.",
+    'Mutual funds price once a day after the close; ETFs trade throughout the day like shares.',
+    'NAV is a fund’s assets minus its liabilities, divided by the shares outstanding.',
+  ],
+};
+
+// localStorage throws in private windows and when site data is blocked, so
+// every access is guarded and the feature defaults to ON — a preference lookup
+// must never be able to break a loading state.
+function _factsOn() {
+  try { return localStorage.getItem(_FACTS_KEY) !== '0'; } catch (e) { return true; }
+}
+
+function _setFactsOn(on) {
+  try { localStorage.setItem(_FACTS_KEY, on ? '1' : '0'); } catch (e) {}
+  const btn = document.getElementById('factsToggle');
+  if (btn) {
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.classList.toggle('off', !on);
+    btn.title = on ? 'Market facts while you wait: on' : 'Market facts while you wait: off';
+  }
+  // Turning off mid-wait clears anything already on screen rather than
+  // stranding it there until the request finishes.
+  if (!on) document.querySelectorAll('.loading-fact').forEach(el => el.remove());
+}
+
+/** A loading block that grows a market fact if the wait outlasts the threshold.
+ *  `message` is plain text (escaped here); `topic` selects the fact pool. */
+function waitingHtml(message, topic) {
+  const msg = `<div class="loading-msg">${esc(message)}</div>`;
+  if (!_factsOn()) return `<div class="loading" role="status" aria-live="polite">${msg}</div>`;
+  _startFactTicker();
+  return `<div class="loading" role="status" aria-live="polite">${msg}` +
+    `<div class="loading-fact" data-topic="${esc(topic || 'default')}" ` +
+    `data-born="${Date.now()}" hidden></div></div>`;
+}
+
+// ONE timer for the whole app, started on demand and stopped as soon as no
+// loading slot is left on the page. Callers never manage a lifecycle: every
+// call site already replaces innerHTML when its data lands, which removes the
+// slot and ends its rotation for free — nothing to leak, nothing to tear down.
+let _factTimer = null;
+
+function _startFactTicker() {
+  if (_factTimer) return;
+  _factTimer = setInterval(_factTick, 400);
+}
+
+function _factTick() {
+  const slots = document.querySelectorAll('.loading-fact');
+  if (!slots.length || !_factsOn()) {
+    clearInterval(_factTimer);
+    _factTimer = null;
+    return;
+  }
+  const now = Date.now();
+  slots.forEach(el => {
+    if (now - Number(el.dataset.born || 0) < _FACT_DELAY_MS) return;
+    const shown = Number(el.dataset.shown || 0);
+    if (shown && now - shown < _FACT_ROTATE_MS) return;
+
+    const pool = FACTS[el.dataset.topic] || FACTS.default;
+    let i = Math.floor(Math.random() * pool.length);
+    if (pool.length > 1 && String(i) === el.dataset.last) i = (i + 1) % pool.length;
+    el.dataset.last = String(i);
+    el.dataset.shown = String(now);
+    // The rotating text is decorative and aria-hidden: announcing each rotation
+    // would spam screen readers, which already heard the status message. The
+    // hide button stays outside that, so it remains reachable.
+    el.innerHTML =
+      `<span class="fact-text" aria-hidden="true">${esc(pool[i])}</span>` +
+      `<button class="fact-hide" type="button" aria-label="Hide market facts">Hide</button>`;
+    el.hidden = false;
+  });
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('.fact-hide')) { e.preventDefault(); _setFactsOn(false); }
+});
+
+// Reflect the stored preference on load and wire the header toggle. app.js runs
+// at the end of <body>, so the button already exists.
+(function initFactsToggle() {
+  const btn = document.getElementById('factsToggle');
+  if (!btn) return;
+  _setFactsOn(_factsOn());
+  btn.addEventListener('click', () => _setFactsOn(!_factsOn()));
+})();
+
 function scoreBadge(n) {
   const cls = n > 0 ? 'score-pos' : n < 0 ? 'score-neg' : 'score-zero';
   return `<span class="badge ${cls}">${n > 0 ? '+' : ''}${n}</span>`;
@@ -349,7 +502,7 @@ async function showStockOverview(sym) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   $('#highlights').innerHTML = '';
   $('#status').textContent = '';
-  $('#content').innerHTML = `<div class="loading">Loading ${esc(sym)}…</div>`;
+  $('#content').innerHTML = waitingHtml(`Loading ${sym}…`, 'stock');
   _chatSymbol = sym;
   try {
     const d = await getJSON('/api/stocks/' + encodeURIComponent(sym));
@@ -406,7 +559,7 @@ async function toggleExpand(tr) {
   _chatSymbol = sym;   // focus the chat bot on the stock just opened
   const body = exp.querySelector('.expand-inner');
   if (body.dataset.loaded) return;
-  body.innerHTML = `<div class="loading">Loading analysts…</div>`;
+  body.innerHTML = waitingHtml('Loading analysts…', 'analysts');
   try {
     const d = detailCache[sym] || (detailCache[sym] = await getJSON(`/api/recommendations/${sym}`));
     body.innerHTML = renderDetail(d);
@@ -1113,11 +1266,17 @@ $('#chatForm').addEventListener('submit', async (e) => {
 
 // ── Welcome popup (shown once per browser) ───────────────────────────────
 (function initWelcome() {
-  if (localStorage.getItem('seen_welcome')) return;
+  // Guarded like every other localStorage access here: it throws in private
+  // windows and when site data is blocked, which used to abort this function
+  // outright and, in dismiss(), throw after the popup had already been hidden.
+  try { if (localStorage.getItem('seen_welcome')) return; } catch (e) {}
   const popup = $('#welcomePopup');
   if (!popup) return;
   popup.hidden = false;
-  const dismiss = () => { popup.hidden = true; localStorage.setItem('seen_welcome', '1'); };
+  const dismiss = () => {
+    popup.hidden = true;
+    try { localStorage.setItem('seen_welcome', '1'); } catch (e) {}
+  };
   const closeBtn = $('#welcomeClose'), gotItBtn = $('#welcomeGotIt');
   if (closeBtn) closeBtn.addEventListener('click', dismiss);
   if (gotItBtn) gotItBtn.addEventListener('click', dismiss);
@@ -1261,7 +1420,7 @@ async function _loadFactsheet(sym, attempt) {
   const panel = document.getElementById('ffs-' + sym);
   if (!panel) return;
   attempt = attempt || 0;
-  if (!attempt) panel.innerHTML = '<div class="loading">Opening the fact sheet…</div>';
+  if (!attempt) panel.innerHTML = waitingHtml('Opening the fact sheet…', 'factsheet');
 
   try {
     const d = await getJSON(`/api/funds/${encodeURIComponent(sym)}/factsheet`);
@@ -1291,7 +1450,7 @@ async function _loadFactsheet(sym, attempt) {
       delete panel.dataset.loaded;
       return;
     }
-    panel.innerHTML = `<div class="loading">${esc(_FS_PROGRESS[d.status] || 'Working…')}</div>`;
+    panel.innerHTML = waitingHtml(_FS_PROGRESS[d.status] || 'Working…', 'factsheet');
     setTimeout(() => _loadFactsheet(sym, attempt + 1), 12000);
   } catch (e) {
     panel.innerHTML = `<div class="empty">Could not load the fact sheet: ${esc(e.message)}</div>`;
@@ -1340,12 +1499,13 @@ function _toggleFactsheet(sym) {
 async function _loadDrivers(sym, period, isRetry) {
   const body = document.querySelector(`#drv-${CSS.escape(sym)} .drv-body`);
   if (!body) return;
-  if (!isRetry) body.innerHTML = '<div class="loading">Analyzing holdings…</div>';
+  if (!isRetry) body.innerHTML = waitingHtml('Analyzing holdings…', 'drivers');
   try {
     const d = await getJSON(`/api/funds/${encodeURIComponent(sym)}/drivers?period=${period}`);
     if (d.status === 'computing') {
-      body.innerHTML = `<div class="loading">Fetching the fund's complete SEC portfolio
-        and pricing every holding — this first run takes ~30s…</div>`;
+      body.innerHTML = waitingHtml(
+        "Fetching the fund's complete SEC portfolio and pricing every holding — "
+        + 'this first run takes ~30s…', 'drivers');
       setTimeout(() => _loadDrivers(sym, period, true), 12000);
       return;
     }
@@ -1385,7 +1545,7 @@ async function _toggleFundDetail(sym) {
   if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
   panel.style.display = 'block';
   if (panel.dataset.loaded) return;
-  panel.innerHTML = '<div class="loading">Loading…</div>';
+  panel.innerHTML = waitingHtml('Loading…', 'holdings');
   try {
     const d = await getJSON('/api/funds/' + encodeURIComponent(sym));
     const holdings = (d.holdings || []).map(h =>
@@ -1413,7 +1573,7 @@ async function _toggleFundDetail(sym) {
               <button data-p="1y" class="active">1Y</button>
             </span>
           </div>
-          <div class="drv-body"><div class="loading">Analyzing holdings…</div></div>
+          <div class="drv-body">${waitingHtml('Analyzing holdings…', 'drivers')}</div>
         </div>
       </div>`;
     panel.dataset.loaded = '1';
@@ -1466,7 +1626,7 @@ async function _runCompare() {
   const b = (document.getElementById('cmpB').value || '').trim().toUpperCase();
   if (!a || !b) { $('#status').textContent = 'Enter two fund symbols to compare.'; return; }
   const out = document.getElementById('compareOut');
-  out.innerHTML = '<div class="loading">Comparing…</div>';
+  out.innerHTML = waitingHtml('Comparing…', 'compare');
   try {
     const d = await getJSON(`/api/funds/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`);
     const fa = d.fund_a, fb = d.fund_b;
@@ -1649,7 +1809,7 @@ async function _loadXray(attempt) {
   const box = document.getElementById('xraySection');
   if (!box) return;
   attempt = attempt || 0;
-  if (!attempt) box.innerHTML = '<div class="loading">Working out what you actually own…</div>';
+  if (!attempt) box.innerHTML = waitingHtml('Working out what you actually own…', 'xray');
 
   try {
     const d = await getJSON('/api/funds/portfolio/xray');
@@ -1658,7 +1818,7 @@ async function _loadXray(attempt) {
         box.innerHTML = '<div class="empty">Still reading your funds’ holdings — reopen this tab shortly.</div>';
         return;
       }
-      box.innerHTML = '<div class="loading">Reading the full holdings of each fund…</div>';
+      box.innerHTML = waitingHtml('Reading the full holdings of each fund…', 'xray');
       setTimeout(() => _loadXray(attempt + 1), 8000);
       return;
     }

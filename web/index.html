@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=38" />
+  <link rel="stylesheet" href="/styles.css?v=39" />
 </head>
 <body>
 <div class="app-shell">
@@ -81,6 +81,8 @@
           <option value="30">30 days</option>
         </select>
         <button id="refresh" title="Fetch latest analyst data now"><span class="refresh-ic">↻</span> Refresh</button>
+        <button id="factsToggle" class="ghost-btn facts-toggle" type="button"
+                aria-pressed="true" title="Market facts while you wait: on">💡 Facts</button>
         <button id="signIn" class="ghost-btn" hidden>Sign in</button>
         <div class="user-menu" id="userMenu" hidden>
           <span class="user-name" id="userName"></span>
@@ -191,6 +193,6 @@
   </form>
 </div>
 
-<script src="/app.js?v=38"></script>
+<script src="/app.js?v=39"></script>
 </body>
 </html>
