@@ -33,6 +33,14 @@ ENV FUND_INDEX_DIR=/data/fund_index
 # they are downloaded once, not on every container start.
 ENV FASTEMBED_CACHE_PATH=/data/fastembed
 
+# glibc gives each thread its own malloc arena, and memory freed back to an
+# arena is not returned to the OS. This process is threaded (ThreadPoolExecutor
+# in service.py, funds.py) and churns pandas/numpy frames on every yfinance
+# download, so RSS climbs steadily even when nothing is retained — and Railway
+# bills resident memory. Capping the arenas trades a little allocator contention
+# for a far flatter memory curve.
+ENV MALLOC_ARENA_MAX=2
+
 # Railway (and most PaaS) injects PORT at runtime
 ENV PORT=8100
 

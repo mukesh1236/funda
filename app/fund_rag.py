@@ -60,7 +60,10 @@ _MAX_PER_SECTION = 2
 _lock = threading.Lock()
 # Bounded: a FAISS index plus ~1500 chunks is tens of MB, and the previous
 # unbounded dict grew for the process lifetime — an OOM on a small container.
-_cache: LRUCache = LRUCache(maxsize=8)
+# 3, not 8: each entry is a FAISS index plus ~1500 chunks — tens of MB — so the
+# old ceiling could hold a few hundred MB resident for funds nobody had opened in
+# hours. Fact sheets are read rarely enough that a miss just re-reads from disk.
+_cache: LRUCache = LRUCache(maxsize=3)
 
 # One ingest at a time per process: two simultaneous "add fund" clicks would
 # otherwise run two MiniLM encodes concurrently and starve the web workers.

@@ -1,10 +1,11 @@
 """Read-side helpers shared by the API and the daily job: build consensus
 feeds, per-symbol detail, and the leaderboard from stored data."""
 import logging
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
+
+from cachetools import TTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +99,11 @@ def _enrich(
 # Keyed by the actual symbol set, not just the market: keying by market alone
 # let a theme-filtered request poison the cache with a subset of symbols for
 # every other request's 5 minutes.
-_DAY_CHANGE_CACHE: Dict[frozenset, Tuple[float, Dict[str, float]]] = {}
-_DAY_CHANGE_TTL = 300  # 5 minutes — fast enough for intraday, cheap on yfinance
+# Bounded on purpose. This is keyed by a frozenset of symbols, so every distinct
+# symbol combination was a new permanent key in the plain dict this used to be:
+# the TTL was checked on read but expired entries were never deleted, so it only
+# ever grew. Same bug class already fixed once in app/fund_rag.py.
+_DAY_CHANGE_CACHE: TTLCache = TTLCache(maxsize=64, ttl=300)  # 5 min: intraday-fresh, cheap on yfinance
 
 
 def _batch_day_changes(symbols: List[str], market: str = "us") -> Dict[str, float]:
@@ -109,10 +113,9 @@ def _batch_day_changes(symbols: List[str], market: str = "us") -> Dict[str, floa
     if not symbols:
         return {}
     key = frozenset(s.upper() for s in symbols)
-    now = time.time()
     cached = _DAY_CHANGE_CACHE.get(key)
-    if cached and now - cached[0] < _DAY_CHANGE_TTL:
-        return cached[1]
+    if cached is not None:
+        return cached
     try:
         import yfinance as yf
         raw = yf.download(
@@ -130,7 +133,7 @@ def _batch_day_changes(symbols: List[str], market: str = "us") -> Dict[str, floa
                         result[sym.upper()] = round((today_c - prev) / prev * 100, 2)
             except Exception:
                 pass
-        _DAY_CHANGE_CACHE[key] = (now, result)
+        _DAY_CHANGE_CACHE[key] = result
         return result
     except Exception as e:
         logger.info("batch day-change fetch failed: %s", e)
@@ -339,8 +342,7 @@ def _highlights(
 # A cache HIT here skips 4 parallel network fetches + summary generation
 # entirely, and is shared across every user hitting this process, not just
 # one browser tab (unlike the frontend's detailCache).
-_DETAIL_CACHE: Dict[str, Tuple[float, StockDetailResult]] = {}
-_DETAIL_TTL = 600   # 10 min — matches _OVERVIEW_CACHE for consistency
+_DETAIL_CACHE: TTLCache = TTLCache(maxsize=256, ttl=600)  # 10 min, matching _OVERVIEW_CACHE
 
 
 def build_detail(
@@ -348,13 +350,13 @@ def build_detail(
 ) -> Optional[StockDetailResult]:
     sym_key = symbol.upper().strip()
     cached = _DETAIL_CACHE.get(sym_key)
-    if cached and time.time() - cached[0] < _DETAIL_TTL:
-        return cached[1]
+    if cached is not None:
+        return cached
 
     result = _build_detail_uncached(store, symbol, settings)
     if result is not None:
         # Don't memorize "not found" — a typo shouldn't stay stuck for 10 min.
-        _DETAIL_CACHE[sym_key] = (time.time(), result)
+        _DETAIL_CACHE[sym_key] = result
     return result
 
 
@@ -444,8 +446,7 @@ def _build_detail_uncached(
     return detail
 
 
-_OVERVIEW_CACHE: Dict[str, Tuple[float, "StockOverview"]] = {}
-_OVERVIEW_TTL = 600   # 10 min — generic data, doesn't need to be tick-fresh
+_OVERVIEW_CACHE: TTLCache = TTLCache(maxsize=256, ttl=600)  # 10 min — generic data, needn't be tick-fresh
 
 
 def build_stock_overview(symbol: str):
@@ -457,10 +458,9 @@ def build_stock_overview(symbol: str):
     from app.sources.sec_insider import fetch_insider_trades
 
     sym = symbol.upper().strip()
-    now = time.time()
     cached = _OVERVIEW_CACHE.get(sym)
-    if cached and now - cached[0] < _OVERVIEW_TTL:
-        return cached[1]
+    if cached is not None:
+        return cached
 
     with ThreadPoolExecutor(max_workers=6) as ex:
         f_prof = ex.submit(fetch_profile, sym)
@@ -509,7 +509,7 @@ def build_stock_overview(symbol: str):
         news=[NewsItem(**n) for n in news_raw],
         insider_trades=[InsiderTrade(**t) for t in raw_trades],
     )
-    _OVERVIEW_CACHE[sym] = (now, overview)
+    _OVERVIEW_CACHE[sym] = overview
     return overview
 
 
