@@ -3,6 +3,11 @@
 *Implemented in `web/` (index.html, styles.css, app.js additions). This doc is
 the design record: layout, palette, component hierarchy, and the rationale.*
 
+> **Current rules.** This is the original design record. The type, space and radius
+> scales were later made closed sets; those rules, and the audit command, are in
+> [`CLAUDE.md`](../../CLAUDE.md) and [ADR 0009](../adr/0009-closed-ui-scales.md). Where
+> this document gives a pixel value that is not on those scales, the scales win.
+
 ## Layout & structure
 
 ```
@@ -74,7 +79,7 @@ all numeric columns.
 Renders uptime, p95 latency trend, error-rate trend, errors-by-hour heatmap,
 SLO compliance bars, and an incidents table with SEV badges. Currently fed by
 **demo data** (clearly labeled) because the TeamOps backend (see
-`docs/TEAMOPS_DESIGN.md`) isn't deployed anywhere funda can reach yet; the
+`docs/archive/TEAMOPS_DESIGN.md`) isn't deployed anywhere funda can reach yet; the
 markup consumes the same shape as TeamOps' `GET /api/dashboard/sre`, so wiring
 it live is a fetch-swap.
 

@@ -1,5 +1,8 @@
 # TeamOps — Multi-Agent Software Engineering Team Platform
 
+> **Archived.** The design for TeamOps, a separate multi-agent engineering platform. It is not
+> part of AlphaFunds' runtime. Kept for history.
+
 ## Context
 
 The user wants a system that behaves like a real software engineering team: 8 role-based

@@ -58,6 +58,34 @@ to whichever keeps the layout intact — nav items went to 13px, not 15px,
 because "Coverage & Leaders" wraps in the 218px rail at 15px. Check the browser,
 don't just check the number.
 
+## Knowledge base (`docs/`)
+
+Look here before searching the code, and **update it in the same change** as the code it
+describes. Index: [`docs/README.md`](docs/README.md). For a narrative tour,
+[`HANDOFF.md`](HANDOFF.md).
+
+| You are about to... | Read first |
+|---|---|
+| Touch a feature | its file in `docs/design/` (rules that must not change, edge cases) |
+| Change the database | `docs/schemas/entities.md`, then `docs/workflows/add-a-column.md` |
+| Add or change an API status or `source` value | `docs/schemas/error-codes.md` |
+| Add a route | regenerate `docs/api/openapi.yaml` (below) |
+| Pick a technology or reverse a past decision | `docs/adr/` (do not rewrite an accepted ADR; supersede it) |
+| Deploy, roll back, or chase memory/cost | `docs/workflows/` |
+| Touch auth, secrets, or anything exposed publicly | `docs/security/policy.md` |
+
+**Generated, never hand-edited:** `docs/api/openapi.yaml` (`python scripts/export_openapi.py`)
+and the table reference in `docs/schemas/entities.md` (`python scripts/export_schema_doc.py`).
+`tests/test_docs_in_sync.py` fails if a route or table is added without regenerating, and
+if a relative link in the docs stops resolving.
+
+**Keeping it honest:** a new ADR for any decision that was measured or argued over; a runbook
+for anything operational done twice; mark claims you could not verify (the sandbox cannot reach
+`sec.gov`) as unverified rather than writing them as fact.
+
+**The repository is public.** Do not put attack mechanics, credentials, or infrastructure IDs
+in `docs/`, `BACKLOG.md`, or commit messages. Reference security items by ID and severity.
+
 ## Project shape (quick orientation)
 
 - FastAPI backend (`app/`), vanilla JS/HTML/CSS frontend (`web/`), SQLite

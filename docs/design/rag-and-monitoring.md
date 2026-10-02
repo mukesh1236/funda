@@ -1,5 +1,11 @@
 # RAG Chatbot + Evaluation & Monitoring — Design Doc
 
+> **Status: partly superseded.** This 2026-07 design predates the fund fact-sheet work.
+> The embedding backend is now ONNX (`fastembed`) rather than `sentence-transformers`
+> ([ADR 0003](../adr/0003-onnx-embeddings.md)), and fund retrieval now runs over real SEC
+> filings with provenance ([`fund-factsheets.md`](fund-factsheets.md)). Read this for the
+> evaluation and monitoring ideas, not as a description of the current retrieval code.
+
 Design for upgrading the `/api/chat` assistant from **context-stuffing** to a
 real **Retrieval-Augmented Generation (RAG)** system, plus an evaluation and
 drift-monitoring layer.

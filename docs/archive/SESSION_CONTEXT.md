@@ -1,5 +1,8 @@
 # Session Context — July 2026 working session
 
+> **Archived.** A snapshot of one July 2026 working session, kept for history. It is stale and
+> has been superseded by [`../../HANDOFF.md`](../../HANDOFF.md) and the rest of this knowledge base.
+
 *Snapshot of everything built/decided in this Claude Code session, so any
 future session (or collaborator) can pick up without re-deriving it.*
 

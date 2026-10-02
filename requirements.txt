@@ -16,6 +16,8 @@ pytest>=8.0
 faiss-cpu>=1.8
 # Imported directly by app/fund_rag.py (it arrived transitively before).
 numpy>=1.26
+# Imported directly by scripts/export_openapi.py (the docs generator); already arrives transitively.
+pyyaml>=6.0
 # ONNX embeddings rather than sentence-transformers: same all-MiniLM-L6-v2
 # weights, but sentence-transformers pulls PyTorch (+2.7 GB of CUDA libraries
 # for a GPU we don't have) and holds ~717 MB resident instead of ~87 MB.

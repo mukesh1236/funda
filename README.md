@@ -185,7 +185,7 @@ app/
 web/                  Static dashboard (vanilla JS/HTML/CSS)
 scripts/run_daily.py  One-shot CLI to run the daily job
 tests/                pytest suite (~25 files; see Tests)
-docs/                 Design notes and session context from past work
+docs/                 Knowledge base: design, architecture, schemas, api, security, adr, workflows (start at docs/README.md)
 ```
 
 ## Setup
