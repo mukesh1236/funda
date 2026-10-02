@@ -456,7 +456,6 @@ input:focus-visible { outline: none; }
 .hl-bar { margin-top: var(--sp-6); min-width: 0; }
 .hl.buy, .hl.sell { display: flex; flex-direction: column; }
 .hl.buy .hl-bar, .hl.sell .hl-bar { margin-top: auto; padding-top: var(--sp-6); }
-.highlights.has-movers .hl.buy, .highlights.has-movers .hl.sell { grid-column: span 6; }
 .buzzlist { list-style: none; margin: var(--sp-5) 0 0; padding: 0; display: flex; flex-direction: column; }
 .buzzlist li {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-4);
@@ -1031,6 +1030,9 @@ td .tick { color: var(--text); font-weight: 700; }
 .tabbar { display: none; }
 
 /* ── Responsive ────────────────────────────────────────────────────────── */
+@media (min-width: 1101px) {
+  .highlights.has-movers .hl.buy, .highlights.has-movers .hl.sell { grid-column: span 6; }
+}
 @media (max-width: 1319px) {
   .c-seg { display: none; }   /* the table must fit its card before it may scroll */
 }
@@ -1043,7 +1045,7 @@ td .tick { color: var(--text); font-weight: 700; }
 @media (max-width: 900px) {
   .main-col { padding: 0 var(--sp-6) 90px; }
   #content > table { display: block; overflow-x: auto; }
-  .topbar { padding: var(--sp-5) 0; gap: var(--sp-4); margin-bottom: var(--sp-5); }
+  .topbar { position: static; padding: var(--sp-5) 0; gap: var(--sp-4); margin-bottom: var(--sp-5); }
   .topnav, .brand-name-long { display: none; }
   .brand { margin-right: 0; }
   .brand-name { font-size: var(--fs-strong); }
