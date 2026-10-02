@@ -139,6 +139,12 @@ class Settings(BaseSettings):
     # less; set the warm interval to 0 to disable warming entirely.
     warm_feed_interval_minutes: int = 30
     alert_check_interval_minutes: int = 60
+    # Refresh every tracked stock's detail (fundamentals, ownership, news) as part of
+    # the daily job, so opening a row reads one SQLite row instead of waiting on Yahoo
+    # and SEC. Costs about 4 upstream calls per tracked symbol per day (plus one LLM
+    # call each when SUMMARY_PROVIDER is not 'rule'); set false to skip it, and rows
+    # are then built on demand as before.
+    precompute_stock_details: bool = True
 
     # ── SRE / AI observability ────────────────────────────────────────────────
     # Daily AI budgets for the burn gauge + preemptive alerts. Defaults match

@@ -212,6 +212,16 @@ CREATE TABLE IF NOT EXISTS fund_factsheets (
     PRIMARY KEY (symbol, doc_key, schema_ver)
 );
 
+-- The slow half of a stock's detail panel (fundamentals, ownership, news, insider
+-- trades, optional LLM narrative), refreshed by the daily job so opening a row never
+-- waits on Yahoo or SEC. One row per symbol, overwritten in place. Derived data: safe
+-- to delete, it is rebuilt on demand.
+CREATE TABLE IF NOT EXISTS stock_extras (
+    symbol     TEXT PRIMARY KEY COLLATE NOCASE,
+    payload    TEXT NOT NULL,     -- JSON: fundamentals, ownership, news, insider_trades, narrative
+    fetched_at TEXT NOT NULL
+);
+
 -- Ingest progress for the polling UI. One row per fund, overwritten in place.
 CREATE TABLE IF NOT EXISTS fund_factsheet_status (
     symbol      TEXT PRIMARY KEY COLLATE NOCASE,
@@ -1047,6 +1057,27 @@ class RecommendationStore:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM profiles").fetchall()
         return {row["symbol"]: dict(row) for row in rows}
+
+    def get_stock_extras(self, symbol: str) -> Optional[dict]:
+        """{'payload': str, 'fetched_at': iso str} for a symbol, or None."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload, fetched_at FROM stock_extras WHERE symbol = ?",
+                (symbol.upper().strip(),),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def put_stock_extras(self, symbol: str, payload: str) -> str:
+        """Upsert and return the fetched_at stamp that was written."""
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with _write_lock, self._connect() as conn:
+            conn.execute(
+                """INSERT INTO stock_extras (symbol, payload, fetched_at) VALUES (?, ?, ?)
+                   ON CONFLICT(symbol) DO UPDATE SET payload = excluded.payload,
+                                                     fetched_at = excluded.fetched_at""",
+                (symbol.upper().strip(), payload, now),
+            )
+        return now
 
     def claim_daily_job(self, today: str) -> bool:
         """Returns True if this call wins the right to run today's daily job.

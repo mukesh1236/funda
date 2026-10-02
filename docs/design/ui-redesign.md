@@ -50,6 +50,7 @@ unchanged. All `.tab[data-view]` and element IDs the logic relied on were preser
 - The opened row draws in two stages: the instant part (why, analyst calls) first, then
   fundamentals, big investors and news into placeholders. See
   [`analyst-summary.md`](analyst-summary.md).
+  The slow half is read from a stored row and labelled with the time it was fetched.
 - News links in the highlight cards use the accent colour and keep their text label on
   mobile; an icon alone was easy to miss.
 

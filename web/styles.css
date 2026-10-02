@@ -642,6 +642,8 @@ td .tick { color: var(--text); font-weight: 700; }
   font-size: var(--fs-body); font-weight: 600; color: var(--muted); }
 .more-pending .skel { height: 10px; }
 .link-btn { background: none; border: none; padding: 0; color: var(--accent); font: inherit; font-weight: 600; text-decoration: underline; }
+.as-of { margin-top: var(--sp-4); font-size: var(--fs-micro); color: var(--muted); }
+.as-of:empty { display: none; }
 .know-more { display: flex; flex-wrap: wrap; gap: var(--sp-6); margin-top: var(--sp-5); font-size: var(--fs-body); }
 .know-more a { display: inline-flex; align-items: center; gap: var(--sp-3); color: var(--accent); text-decoration: none; font-weight: 600; }
 .know-more a:hover { text-decoration: underline; }
