@@ -411,6 +411,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/recommendations/{symbol}/core:
+    get:
+      summary: Detail Core
+      description: 'The instant half of a stock''s detail: consensus, analyst calls and the rule
+
+        summary, straight from the database with no network call.'
+      operationId: detail_core_api_recommendations__symbol__core_get
+      parameters:
+      - name: symbol
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Symbol
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockDetailResult'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/recommendations/{symbol}/extras:
+    get:
+      summary: Detail Extras
+      description: 'The slow half: fundamentals, ownership, news and insider trades (network),
+
+        plus a refreshed summary when news or an LLM narrative changes it. Tracked
+
+        symbols only, so this is not a general proxy to the upstream sources.'
+      operationId: detail_extras_api_recommendations__symbol__extras_get
+      parameters:
+      - name: symbol
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Symbol
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockDetailExtras'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/recommendations/{symbol}:
     get:
       summary: Detail
@@ -2475,6 +2531,42 @@ components:
       required:
       - role
       title: SetRoleRequest
+    StockDetailExtras:
+      properties:
+        symbol:
+          type: string
+          title: Symbol
+        ownership:
+          anyOf:
+          - $ref: '#/components/schemas/Ownership'
+          - type: 'null'
+        fundamentals:
+          anyOf:
+          - $ref: '#/components/schemas/Fundamentals'
+          - type: 'null'
+        news:
+          items:
+            $ref: '#/components/schemas/NewsItem'
+          type: array
+          title: News
+          default: []
+        insider_trades:
+          items:
+            $ref: '#/components/schemas/InsiderTrade'
+          type: array
+          title: Insider Trades
+          default: []
+        summary:
+          anyOf:
+          - $ref: '#/components/schemas/AnalystSummary'
+          - type: 'null'
+      type: object
+      required:
+      - symbol
+      title: StockDetailExtras
+      description: 'The slow half of a stock''s detail (everything fetched over the network),
+
+        served separately from the instant half so the UI need not wait on it.'
     StockDetailResult:
       properties:
         symbol:

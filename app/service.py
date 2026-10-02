@@ -28,6 +28,7 @@ from app.models import (
     RecommendationFeedResult,
     RecommendationOut,
     Returns,
+    StockDetailExtras,
     StockDetailResult,
     ThemeInfo,
     ThemesResult,
@@ -343,6 +344,9 @@ def _highlights(
 # entirely, and is shared across every user hitting this process, not just
 # one browser tab (unlike the frontend's detailCache).
 _DETAIL_CACHE: TTLCache = TTLCache(maxsize=256, ttl=600)  # 10 min, matching _OVERVIEW_CACHE
+# The slow half of the detail (news, ownership, fundamentals, insider trades) on
+# its own, so the UI can ask for it separately from the instant half.
+_EXTRAS_CACHE: TTLCache = TTLCache(maxsize=256, ttl=600)
 
 
 def build_detail(
@@ -363,6 +367,30 @@ def build_detail(
 def _build_detail_uncached(
     store: RecommendationStore, symbol: str, settings=None
 ) -> Optional[StockDetailResult]:
+    """The full detail: the instant half plus the slow half, joined. Callers that
+    can show the halves separately (the web UI) use build_detail_core and
+    build_detail_extras instead; this stays for callers that need it whole."""
+    core = build_detail_core(store, symbol, settings)
+    if core is None:
+        return None
+    extras = build_detail_extras(store, symbol, settings, core=core)
+    update = {
+        "news": extras.news, "ownership": extras.ownership,
+        "fundamentals": extras.fundamentals, "insider_trades": extras.insider_trades,
+    }
+    if extras.summary is not None:
+        update["summary"] = extras.summary
+    return core.model_copy(update=update)
+
+
+def build_detail_core(
+    store: RecommendationStore, symbol: str, settings=None
+) -> Optional[StockDetailResult]:
+    """Everything about a stock that comes from our own database: consensus, the
+    named analyst calls, and the rule-based "why analysts recommend it" summary.
+    Makes no network call and no LLM call, so it returns in milliseconds. News,
+    ownership, fundamentals and insider trades are left empty; see
+    build_detail_extras. None when no ratings are tracked for the symbol."""
     recs = store.list_for_symbol(symbol)
     if not recs:
         return None
@@ -398,8 +426,32 @@ def _build_detail_uncached(
         )
         for r in recs
     ]
-    # The four enrichment fetches are independent network calls — run them
-    # concurrently instead of stacking their latencies end to end.
+    detail = StockDetailResult(
+        symbol=symbol, consensus=consensus, recommendations=rec_out,
+        outcome=consensus.outcome,
+    )
+    from app.summarize import build_rule_summary
+    detail.summary = build_rule_summary(detail)
+    return detail
+
+
+def build_detail_extras(
+    store: RecommendationStore, symbol: str, settings=None,
+    core: Optional[StockDetailResult] = None,
+) -> Optional[StockDetailExtras]:
+    """The slow half: four independent network fetches (run concurrently, not end
+    to end) plus the news-derived part of the summary and, when configured, the
+    LLM narrative. Cached; None when no ratings are tracked for the symbol, so
+    this is not an open proxy to Yahoo/SEC for arbitrary tickers."""
+    sym_key = symbol.upper().strip()
+    cached = _EXTRAS_CACHE.get(sym_key)
+    if cached is not None:
+        return cached
+
+    core = core or build_detail_core(store, symbol, settings)
+    if core is None:
+        return None
+
     from app.sources.sec_insider import fetch_insider_trades
     with ThreadPoolExecutor(max_workers=4) as ex:
         f_news = ex.submit(get_news, symbol)
@@ -433,17 +485,20 @@ def _build_detail_uncached(
     from app.models import InsiderTrade
     insider_trades = [InsiderTrade(**t) for t in raw_trades]
 
-    detail = StockDetailResult(
-        symbol=symbol, consensus=consensus, ownership=ownership,
-        fundamentals=fundamentals,
-        recommendations=rec_out, outcome=consensus.outcome, news=news,
-        insider_trades=insider_trades,
-    )
-    # "Why analysts recommend" summary (rule-based, optional LLM narrative).
+    # "Why analysts recommend" summary with the news-derived reason and the
+    # optional LLM narrative. Handed back only when it differs from the instant
+    # one, so the UI re-renders that block only when there is something new.
     from app.config import get_settings
     from app.summarize import build_summary
-    detail.summary = build_summary(detail, settings or get_settings())
-    return detail
+    full = core.model_copy(update={"news": news})
+    summary = build_summary(full, settings or get_settings())
+    extras = StockDetailExtras(
+        symbol=core.symbol, ownership=ownership, fundamentals=fundamentals,
+        news=news, insider_trades=insider_trades,
+        summary=summary if summary != core.summary else None,
+    )
+    _EXTRAS_CACHE[sym_key] = extras
+    return extras
 
 
 _OVERVIEW_CACHE: TTLCache = TTLCache(maxsize=256, ttl=600)  # 10 min — generic data, needn't be tick-fresh

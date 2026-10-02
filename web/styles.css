@@ -635,6 +635,13 @@ td .tick { color: var(--text); font-weight: 700; }
 .news-list { margin: 0; padding-left: var(--sp-6); display: flex; flex-direction: column; gap: var(--sp-3); font-size: var(--fs-body); }
 .news-list a { color: var(--accent); }
 .news-list .src { color: var(--muted); font-size: var(--fs-meta); margin-left: var(--sp-2); }
+.expand .skel { background: var(--border); }   /* the row is already --surface-2 */
+.slot-skel { display: flex; flex-direction: column; gap: var(--sp-4); padding: var(--sp-3) 0; }
+.slot-skel .skel { height: 12px; }
+.more-pending { display: flex; align-items: center; gap: var(--sp-5); padding: var(--sp-4) 0; border-bottom: 1px solid var(--border);
+  font-size: var(--fs-body); font-weight: 600; color: var(--muted); }
+.more-pending .skel { height: 10px; }
+.link-btn { background: none; border: none; padding: 0; color: var(--accent); font: inherit; font-weight: 600; text-decoration: underline; }
 .know-more { display: flex; flex-wrap: wrap; gap: var(--sp-6); margin-top: var(--sp-5); font-size: var(--fs-body); }
 .know-more a { display: inline-flex; align-items: center; gap: var(--sp-3); color: var(--accent); text-decoration: none; font-weight: 600; }
 .know-more a:hover { text-decoration: underline; }

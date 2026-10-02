@@ -47,6 +47,9 @@ unchanged. All `.tab[data-view]` and element IDs the logic relied on were preser
   fundamentals, analyst calls, big investors, news) sits in collapsed `<details>` expanders
   built by `moreSection()`. Two Yahoo Finance links (latest news, full quote) are always
   shown, so a stock whose news feed came back empty still has somewhere to go next.
+- The opened row draws in two stages: the instant part (why, analyst calls) first, then
+  fundamentals, big investors and news into placeholders. See
+  [`analyst-summary.md`](analyst-summary.md).
 - News links in the highlight cards use the accent colour and keep their text label on
   mobile; an icon alone was easy to miss.
 

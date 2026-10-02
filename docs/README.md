@@ -43,6 +43,7 @@ docs/
 | [`market-facts.md`](design/market-facts.md) | Facts shown during network waits, and the toggle |
 | [`rag-and-monitoring.md`](design/rag-and-monitoring.md) | Earlier design for retrieval and evaluation (partly superseded by `fund-factsheets.md`) |
 | [`ui-redesign.md`](design/ui-redesign.md) | Dashboard layout and palette |
+| [`analyst-summary.md`](design/analyst-summary.md) | How "why analysts recommend it" is built, and why it loads in two halves |
 | [`bottleneck-fix-plan.md`](design/bottleneck-fix-plan.md) | Performance review and plan |
 
 ## Keeping it true

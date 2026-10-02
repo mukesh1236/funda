@@ -40,6 +40,7 @@ from app.models import (
     RegisterRequest,
     ResetPasswordRequest,
     SetRoleRequest,
+    StockDetailExtras,
     StockDetailResult,
     ThemesResult,
     UserOut,
@@ -50,6 +51,8 @@ from app.models import (
 )
 from app.service import (
     build_detail,
+    build_detail_core,
+    build_detail_extras,
     build_feed,
     build_leaderboard,
     build_market_digest,
@@ -447,6 +450,35 @@ def stock_overview(symbol: str):
     return overview
 
 
+@app.get("/api/recommendations/{symbol}/core", response_model=StockDetailResult)
+def detail_core(symbol: str):
+    """The instant half of a stock's detail: consensus, analyst calls and the rule
+    summary, straight from the database with no network call."""
+    try:
+        sym = normalize_symbol(symbol)
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e))
+    result = build_detail_core(store, sym, settings)
+    if not result:
+        raise HTTPException(404, detail=f"No recommendations tracked for {sym}.")
+    return result
+
+
+@app.get("/api/recommendations/{symbol}/extras", response_model=StockDetailExtras)
+def detail_extras(symbol: str):
+    """The slow half: fundamentals, ownership, news and insider trades (network),
+    plus a refreshed summary when news or an LLM narrative changes it. Tracked
+    symbols only, so this is not a general proxy to the upstream sources."""
+    try:
+        sym = normalize_symbol(symbol)
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e))
+    result = build_detail_extras(store, sym, settings)
+    if not result:
+        raise HTTPException(404, detail=f"No recommendations tracked for {sym}.")
+    return result
+
+
 @app.get("/api/recommendations/{symbol}", response_model=StockDetailResult)
 def detail(symbol: str):
     try:
@@ -606,8 +638,9 @@ def chat_stream(req: ChatRequest):
 def _run_daily_and_invalidate():
     run_daily(store, settings)
     _RESPONSE_CACHE.clear()   # let freshly collected data show up immediately
-    from app.service import _DETAIL_CACHE, _OVERVIEW_CACHE
+    from app.service import _DETAIL_CACHE, _EXTRAS_CACHE, _OVERVIEW_CACHE
     _DETAIL_CACHE.clear()
+    _EXTRAS_CACHE.clear()
     _OVERVIEW_CACHE.clear()
 
 
