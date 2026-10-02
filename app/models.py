@@ -246,6 +246,19 @@ class StockDetailResult(BaseModel):
     insider_trades: List[InsiderTrade] = []
 
 
+class StockDetailExtras(BaseModel):
+    """The slow half of a stock's detail (everything fetched over the network),
+    served separately from the instant half so the UI need not wait on it."""
+    symbol: str
+    ownership: Optional[Ownership] = None
+    fundamentals: Optional[Fundamentals] = None
+    news: List[NewsItem] = []
+    insider_trades: List[InsiderTrade] = []
+    # Present only when the news-derived reason or an LLM narrative changed the
+    # summary; None means the instant summary stands.
+    summary: Optional[AnalystSummary] = None
+
+
 class LeaderboardEntry(BaseModel):
     symbol: str
     consensus_score: int

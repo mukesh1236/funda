@@ -456,7 +456,6 @@ input:focus-visible { outline: none; }
 .hl-bar { margin-top: var(--sp-6); min-width: 0; }
 .hl.buy, .hl.sell { display: flex; flex-direction: column; }
 .hl.buy .hl-bar, .hl.sell .hl-bar { margin-top: auto; padding-top: var(--sp-6); }
-.highlights.has-movers .hl.buy, .highlights.has-movers .hl.sell { grid-column: span 6; }
 .buzzlist { list-style: none; margin: var(--sp-5) 0 0; padding: 0; display: flex; flex-direction: column; }
 .buzzlist li {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-4);
@@ -478,9 +477,9 @@ input:focus-visible { outline: none; }
 }
 .act-badge.pos { background: var(--gain-soft); color: var(--gain); }
 .act-badge.neg { background: var(--loss-soft); color: var(--loss); }
-.why-link { display: inline-flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-micro);
-  color: var(--muted); text-decoration: none; }
-.why-link:hover { color: var(--accent); }
+.why-link { display: inline-flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-meta);
+  color: var(--accent); text-decoration: none; white-space: nowrap; }
+.why-link:hover { text-decoration: underline; }
 .pct-up   { color: var(--gain); font-weight: 600; font-variant-numeric: tabular-nums; }
 .pct-down { color: var(--loss); font-weight: 600; font-variant-numeric: tabular-nums; }
 
@@ -615,6 +614,37 @@ td .tick { color: var(--text); font-weight: 700; }
 .fundsec .fl { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--sp-3) var(--sp-6); }
 .fm-lbl { color: var(--muted); font-size: var(--fs-meta); }
 .fm-val, .fv { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* Expanders inside an opened row: the answer leads, the rest is one click away. */
+.more-list { display: flex; flex-direction: column; margin-top: var(--sp-5); border-top: 1px solid var(--border); }
+.more { border-bottom: 1px solid var(--border); }
+.summary .more, .fundsec .more { border-bottom: none; margin-top: var(--sp-3); }
+.more > summary {
+  display: flex; align-items: center; gap: var(--sp-3); cursor: pointer; list-style: none;
+  padding: var(--sp-4) 0; font-size: var(--fs-body); font-weight: 600; color: var(--text-2);
+}
+.more > summary::-webkit-details-marker { display: none; }
+.more > summary:hover { color: var(--text); }
+.more-caret { color: var(--muted); transition: transform 0.15s; }
+.more[open] > summary .more-caret { transform: rotate(90deg); }
+.more-count {
+  font-size: var(--fs-micro); font-weight: 600; color: var(--muted);
+  background: var(--neutral-soft); border-radius: var(--radius-pill); padding: var(--sp-1) var(--sp-3);
+}
+.more-body { padding: 0 0 var(--sp-5) var(--sp-6); }
+.news-list { margin: 0; padding-left: var(--sp-6); display: flex; flex-direction: column; gap: var(--sp-3); font-size: var(--fs-body); }
+.news-list a { color: var(--accent); }
+.news-list .src { color: var(--muted); font-size: var(--fs-meta); margin-left: var(--sp-2); }
+.expand .skel { background: var(--border); }   /* the row is already --surface-2 */
+.slot-skel { display: flex; flex-direction: column; gap: var(--sp-4); padding: var(--sp-3) 0; }
+.slot-skel .skel { height: 12px; }
+.more-pending { display: flex; align-items: center; gap: var(--sp-5); padding: var(--sp-4) 0; border-bottom: 1px solid var(--border);
+  font-size: var(--fs-body); font-weight: 600; color: var(--muted); }
+.more-pending .skel { height: 10px; }
+.link-btn { background: none; border: none; padding: 0; color: var(--accent); font: inherit; font-weight: 600; text-decoration: underline; }
+.know-more { display: flex; flex-wrap: wrap; gap: var(--sp-6); margin-top: var(--sp-5); font-size: var(--fs-body); }
+.know-more a { display: inline-flex; align-items: center; gap: var(--sp-3); color: var(--accent); text-decoration: none; font-weight: 600; }
+.know-more a:hover { text-decoration: underline; }
 
 /* ── Loading skeleton and empty / error states ─────────────────────────── */
 .skel {
@@ -1031,6 +1061,9 @@ td .tick { color: var(--text); font-weight: 700; }
 .tabbar { display: none; }
 
 /* ── Responsive ────────────────────────────────────────────────────────── */
+@media (min-width: 1101px) {
+  .highlights.has-movers .hl.buy, .highlights.has-movers .hl.sell { grid-column: span 6; }
+}
 @media (max-width: 1319px) {
   .c-seg { display: none; }   /* the table must fit its card before it may scroll */
 }
@@ -1043,7 +1076,7 @@ td .tick { color: var(--text); font-weight: 700; }
 @media (max-width: 900px) {
   .main-col { padding: 0 var(--sp-6) 90px; }
   #content > table { display: block; overflow-x: auto; }
-  .topbar { padding: var(--sp-5) 0; gap: var(--sp-4); margin-bottom: var(--sp-5); }
+  .topbar { position: static; padding: var(--sp-5) 0; gap: var(--sp-4); margin-bottom: var(--sp-5); }
   .topnav, .brand-name-long { display: none; }
   .brand { margin-right: 0; }
   .brand-name { font-size: var(--fs-strong); }
@@ -1061,7 +1094,7 @@ td .tick { color: var(--text); font-weight: 700; }
   .hl { padding: var(--sp-6); }
   .hl.catalysts, .hl.movers, .hl.buzz { grid-column: span 2; }
   .hl.buy, .hl.sell { grid-column: span 1; }
-  .hl-hint, .why-txt { display: none; }
+  .hl-hint { display: none; }
   .c-conf, .c-ret, .c-tgt, .c-stat, .c-seg { display: none; }
   .tbl .tick-avatar { display: none; }
   .cons { min-width: 100px; }

@@ -634,28 +634,124 @@ async function toggleExpand(tr) {
   const body = exp.querySelector('.expand-inner');
   if (body.dataset.loaded) return;
   body.innerHTML = waitingHtml('Loading analysts…', 'analysts');
+  // The detail comes in two halves. The core is database-only and lands in
+  // milliseconds; the extras (fundamentals, ownership, news) wait on upstream
+  // services. Fetch both at once and draw each as it arrives, so the slow half
+  // never holds the fast half hostage.
+  const entry = detailCache[sym] || (detailCache[sym] = {});
+  const extrasP = _loadExtras(sym, entry);          // never rejects (see below)
   try {
-    const d = detailCache[sym] || (detailCache[sym] = await getJSON(`/api/recommendations/${sym}`));
-    body.innerHTML = renderDetail(d);
-    body.dataset.loaded = '1';
+    entry.core = entry.core || await getJSON(`/api/recommendations/${encodeURIComponent(sym)}/core`);
   } catch (e) {
+    delete detailCache[sym];
     body.innerHTML = `<div class="loading">Could not load: ${esc(e.message)}</div>`;
+    return;
+  }
+  body.innerHTML = renderDetail(entry.core, entry.extras || null);
+  body.dataset.loaded = '1';
+  if (!entry.extras) {
+    const ex = await extrasP;
+    if (!body.isConnected) return;   // the table was re-rendered meanwhile
+    _fillExtras(body, entry.core, ex);
   }
 }
 
+// Resolves to the extras, or to {error} — it must not reject, because this runs
+// concurrently with the core request and an unhandled rejection would trip the
+// global handler that replaces the whole page with an error banner.
+function _loadExtras(sym, entry) {
+  if (entry.extras) return Promise.resolve(entry.extras);
+  return getJSON(`/api/recommendations/${encodeURIComponent(sym)}/extras`)
+    .then((d) => (entry.extras = d))
+    .catch((e) => ({ error: e.message || 'Request failed' }));
+}
+
+function _fillExtras(body, core, ex) {
+  const slots = _extraSlots(core, ex);
+  for (const name of ['fundamentals', 'ownership', 'news']) {
+    const slot = body.querySelector(`[data-slot="${name}"]`);
+    if (slot) slot.innerHTML = slots[name];
+  }
+  // The refreshed summary arrives only when news themes or an LLM narrative
+  // changed it. Keep "more reasons" open if the reader already opened it.
+  if (ex && ex.summary) {
+    const slot = body.querySelector('[data-slot="summary"]');
+    if (slot) {
+      const wasOpen = !!(slot.querySelector('details.more') || {}).open;
+      slot.innerHTML = renderSummary(ex.summary);
+      const d = slot.querySelector('details.more');
+      if (d && wasOpen) d.open = true;
+    }
+  }
+  const retry = body.querySelector('[data-extras-retry]');
+  if (retry) retry.addEventListener('click', () => {
+    const entry = detailCache[core.symbol];
+    if (!entry) return;
+    delete entry.extras;
+    body.querySelectorAll('[data-slot]').forEach((s) => { if (s.dataset.slot !== 'summary') s.innerHTML = _pendingSlot(s.dataset.slot); });
+    _loadExtras(core.symbol, entry).then((r) => { if (body.isConnected) _fillExtras(body, core, r); });
+  });
+}
+
+// What each slow slot shows before its data lands.
+function _pendingSlot(name) {
+  const line = (w) => `<span class="skel" style="width:${w}"></span>`;
+  if (name === 'fundamentals') {
+    return `<div class="fundsec" aria-busy="true"><h4>Fundamentals</h4><div class="slot-skel">${line('90%')}${line('70%')}</div></div>`;
+  }
+  const label = name === 'ownership' ? 'Big investors &amp; funds' : 'Recent news';
+  return `<div class="more-pending"><span>${label}</span>${line('120px')}</div>`;
+}
+
+function _extraSlots(d, ex) {
+  if (!ex) return { fundamentals: _pendingSlot('fundamentals'), ownership: _pendingSlot('ownership'), news: _pendingSlot('news') };
+  if (ex.error) {
+    return {
+      fundamentals: `<div class="fundsec"><h4>Fundamentals</h4><p class="muted">Couldn't load fundamentals, ownership and news right now. ` +
+        `<button type="button" class="link-btn" data-extras-retry>Retry</button></p></div>`,
+      ownership: '', news: '',
+    };
+  }
+  const items = (ex.news || []).map(n => `<li>${n.url
+    ? `<a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a>` : esc(n.title)}
+    ${n.publisher ? `<span class="src">${esc(n.publisher)}</span>` : ''}</li>`).join('');
+  return {
+    fundamentals: renderFundamentals(ex.fundamentals, { compact: true }),
+    ownership: ex.ownership ? moreSection('Big investors & funds', null, renderOwnership(ex.ownership, { bare: true })) : '',
+    news: moreSection('Recent news', (ex.news || []).length || null, items ? `<ul class="news-list">${items}</ul>` : ''),
+  };
+}
+
+// A native <details> expander: collapsed by default so an opened row leads with
+// the answer (why + fundamentals) and everything else is one click away.
+function moreSection(title, count, inner) {
+  if (!inner) return '';
+  return `<details class="more"><summary>${icon('chevron-right', 'ic xs more-caret')}<span>${esc(title)}</span>` +
+    `${count != null ? `<span class="more-count">${esc(String(count))}</span>` : ''}</summary>` +
+    `<div class="more-body">${inner}</div></details>`;
+}
+
+const _REASONS_SHOWN = 3;
+
 function renderSummary(sm) {
   if (!sm) return '';
-  const reasons = (sm.reasons || []).map(r => `<li>${esc(r)}</li>`).join('');
+  const all = sm.reasons || [];
+  const li = (r) => `<li>${esc(r)}</li>`;
   const narrative = sm.narrative ? `<p class="sm-narr">${esc(sm.narrative)}</p>` : '';
+  const rest = all.slice(_REASONS_SHOWN);
+  const more = rest.length
+    ? moreSection(`${rest.length} more reason${rest.length === 1 ? '' : 's'}`, null,
+        `<ul class="sm-reasons">${rest.map(li).join('')}</ul>`) : '';
   return `<div class="summary">
     <h4>Why analysts recommend it</h4>
     <div class="sm-head">${esc(sm.headline)}</div>
     ${narrative}
-    <ul class="sm-reasons">${reasons}</ul>
+    <ul class="sm-reasons">${all.slice(0, _REASONS_SHOWN).map(li).join('')}</ul>
+    ${more}
   </div>`;
 }
 
-function renderOwnership(o) {
+function renderOwnership(o, { bare = false } = {}) {
   if (!o || (o.inst_pct == null && !o.funds?.length && !o.recent_buyers?.length)) return '';
   const head = `Institutions hold ${o.inst_pct != null ? o.inst_pct + '%' : '—'} of the company`
     + (o.insider_pct != null ? `, insiders ${o.insider_pct}%` : '') + '.';
@@ -668,7 +764,7 @@ function renderOwnership(o) {
   const funds = (o.funds || []).length
     ? `<h5>Top fund / ETF holders</h5>${o.funds.map(row).join('')}` : '';
   return `<div class="ownsec">
-    <h4>Big investors &amp; funds</h4>
+    ${bare ? '' : '<h4>Big investors &amp; funds</h4>'}
     <p class="muted">${head} <em>% shown is each holder's share of the company — not the stock's weight inside the fund.</em></p>
     ${buyers}${funds}</div>`;
 }
@@ -681,10 +777,10 @@ function fmtCap(n) {
   return '$' + n;
 }
 
-function renderFundamentals(f) {
+function renderFundamentals(f, { compact = false } = {}) {
   if (!f) return '';
   const stat = (label, v) => `<div class="fund-stat"><div class="fl">${label}</div><div class="fv">${v == null ? '<span class="muted">—</span>' : v}</div></div>`;
-  const grid = [
+  const cells = [
     stat('P/E', f.pe_ratio), stat('Forward P/E', f.forward_pe), stat('PEG', f.peg_ratio),
     stat('EPS', f.eps != null ? '$' + f.eps : null), stat('Market cap', fmtCap(f.market_cap)),
     stat('Rev. growth', f.revenue_growth != null ? f.revenue_growth + '%' : null),
@@ -693,18 +789,31 @@ function renderFundamentals(f) {
     stat('Debt/Equity', f.debt_to_equity), stat('Dividend yield', f.dividend_yield != null ? f.dividend_yield + '%' : null),
     stat('Beta', f.beta), stat('Price/Book', f.price_to_book),
     stat('52w range', (f.week52_low != null && f.week52_high != null) ? `$${f.week52_low}–$${f.week52_high}` : null),
-  ].join('');
+  ];
   const notes = (f.notes || []).map(n => `<li>${esc(n)}</li>`).join('');
+  const notesHtml = notes ? `<ul class="sm-reasons">${notes}</ul>` : '';
   const sector = f.sector || f.industry ? `<p class="muted">${esc([f.sector, f.industry].filter(Boolean).join(' · '))}</p>` : '';
+  if (compact) {
+    // P/E, forward P/E, market cap, revenue growth, profit margin, 52-week range.
+    const KEY = [0, 1, 4, 5, 6, 12];
+    const key = KEY.map(i => cells[i]).join('');
+    const rest = cells.filter((_, i) => !KEY.includes(i)).join('');
+    return `<div class="fundsec">
+      <h4>Fundamentals</h4>
+      ${sector}
+      <div class="fund-grid">${key}</div>
+      ${moreSection('All fundamentals', null, `<div class="fund-grid">${rest}</div>${notesHtml}`)}
+    </div>`;
+  }
   return `<div class="fundsec">
-    <h4>📊 Stock Fundamentals</h4>
+    <h4>Stock Fundamentals</h4>
     ${sector}
-    <div class="fund-grid">${grid}</div>
-    ${notes ? `<ul class="sm-reasons">${notes}</ul>` : ''}
+    <div class="fund-grid">${cells.join('')}</div>
+    ${notesHtml}
   </div>`;
 }
 
-function renderDetail(d) {
+function renderDetail(d, ex) {
   const named = d.recommendations.filter(r => r.firm);
   const analysts = named.length ? named.map(r => `
     <div class="analyst">
@@ -715,12 +824,23 @@ function renderDetail(d) {
     </div>`).join('')
     : `<div class="muted">No named-analyst detail available — counts come from aggregate sources (${esc(d.consensus.sources.join(', '))}).</div>`;
 
-  const news = (d.news || []).length ? `
-    <div class="news"><h4>Recent news / context</h4><ul>
-      ${d.news.map(n => `<li><a href="${esc(n.url || '#')}" target="_blank" rel="noopener">${esc(n.title)}</a> <span class="src">${esc(n.publisher || '')}</span></li>`).join('')}
-    </ul></div>` : '';
+  // These two links need only the symbol, so they are there from the first
+  // paint and stay even if the news feed comes back empty.
+  const sym = encodeURIComponent(d.symbol);
+  const knowMore = `<div class="know-more">
+    <a href="https://finance.yahoo.com/quote/${sym}/news" target="_blank" rel="noopener">${icon('newspaper', 'ic sm')}Latest news</a>
+    <a href="https://finance.yahoo.com/quote/${sym}" target="_blank" rel="noopener">${icon('trending-up', 'ic sm')}Full quote &amp; chart</a>
+  </div>`;
 
-  return `${renderSummary(d.summary)}${renderFundamentals(d.fundamentals)}${renderOwnership(d.ownership)}<h4>Which analysts recommended ${esc(d.symbol)} (${named.length})</h4>${analysts}${news}`;
+  const slots = _extraSlots(d, ex);
+  return `<div data-slot="summary">${renderSummary(ex && ex.summary ? ex.summary : d.summary)}</div>
+    <div data-slot="fundamentals">${slots.fundamentals}</div>
+    <div class="more-list">
+      ${moreSection('Analyst calls', named.length || null, analysts)}
+      <div data-slot="ownership">${slots.ownership}</div>
+      <div data-slot="news">${slots.news}</div>
+    </div>
+    ${knowMore}`;
 }
 
 async function loadLeaderboard() {
