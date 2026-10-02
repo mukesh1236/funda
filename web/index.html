@@ -4,95 +4,147 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AlphaFunds — Analyst Recommendation Tracker</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=39" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#f6f7fb" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0b0f1a" media="(prefers-color-scheme: dark)" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%234338ca'/%3E%3Cpath d='M9 21l7-9 7 9' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <!-- Apply a saved theme before first paint so there is no light→dark flash.
+       Storage can throw (private windows), so it is guarded; with nothing
+       saved the OS preference decides, via the media query in styles.css. -->
+  <script>
+    try {
+      var t = localStorage.getItem('theme');
+      if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  </script>
+  <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="/styles.css?v=40" />
 </head>
 <body>
+<!-- Icon sprite: Lucide (ISC). See THIRD_PARTY_NOTICES.txt. -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <symbol id="i-layout-dashboard" viewBox="0 0 24 24"><rect width="7" height="9" x="3" y="3" rx="1" /><rect width="7" height="5" x="14" y="3" rx="1" /><rect width="7" height="9" x="14" y="12" rx="1" /><rect width="7" height="5" x="3" y="16" rx="1" /></symbol>
+  <symbol id="i-chart-column" viewBox="0 0 24 24"><path d="M3 3v16a2 2 0 0 0 2 2h16" /><path d="M18 17V9" /><path d="M13 17V5" /><path d="M8 17v-3" /></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z" /></symbol>
+  <symbol id="i-chart-pie" viewBox="0 0 24 24"><path d="M21 12c.552 0 1.005-.449.95-.998a10 10 0 0 0-8.953-8.951c-.55-.055-.998.398-.998.95v8a1 1 0 0 0 1 1z" /><path d="M21.21 15.89A10 10 0 1 1 8 2.83" /></symbol>
+  <symbol id="i-newspaper" viewBox="0 0 24 24"><path d="M15 18h-5" /><path d="M18 14h-8" /><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-4 0v-9a2 2 0 0 1 2-2h2" /><rect width="8" height="4" x="10" y="6" rx="1" /></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" /></symbol>
+  <symbol id="i-refresh-cw" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M8 16H3v5" /></symbol>
+  <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z" /><path d="M20 2v4" /><path d="M22 4h-4" /><circle cx="4" cy="20" r="2" /></symbol>
+  <symbol id="i-circle-user" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /><circle cx="12" cy="10" r="3" /><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662" /></symbol>
+  <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></symbol>
+  <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7" /><path d="M12 19V5" /></symbol>
+  <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="M12 5v14" /><path d="m19 12-7 7-7-7" /></symbol>
+  <symbol id="i-trending-up" viewBox="0 0 24 24"><path d="M16 7h6v6" /><path d="m22 7-8.5 8.5-5-5L2 17" /></symbol>
+  <symbol id="i-trending-down" viewBox="0 0 24 24"><path d="M16 17h6v-6" /><path d="m22 17-8.5-8.5-5 5L2 7" /></symbol>
+  <symbol id="i-megaphone" viewBox="0 0 24 24"><path d="M11 6a13 13 0 0 0 8.4-2.8A1 1 0 0 1 21 4v12a1 1 0 0 1-1.6.8A13 13 0 0 0 11 14H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z" /><path d="M6 14a12 12 0 0 0 2.4 7.2 2 2 0 0 0 3.2-2.4A8 8 0 0 1 10 14" /><path d="M8 6v8" /></symbol>
+  <symbol id="i-flame" viewBox="0 0 24 24"><path d="M12 3q1 4 4 6.5t3 5.5a1 1 0 0 1-14 0 5 5 0 0 1 1-3 1 1 0 0 0 5 0c0-2-1.5-3-1.5-5q0-2 2.5-4" /></symbol>
+  <symbol id="i-lightbulb" viewBox="0 0 24 24"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" /><path d="M9 18h6" /><path d="M10 22h4" /></symbol>
+  <symbol id="i-smartphone" viewBox="0 0 24 24"><rect width="14" height="20" x="5" y="2" rx="2" ry="2" /><path d="M12 18h.01" /></symbol>
+  <symbol id="i-log-out" viewBox="0 0 24 24"><path d="m16 17 5-5-5-5" /><path d="M21 12H9" /><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /></symbol>
+  <symbol id="i-log-in" viewBox="0 0 24 24"><path d="m10 17 5-5-5-5" /><path d="M15 12H3" /><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" /></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" /></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12" /><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" /></symbol>
+  <symbol id="i-triangle-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" /><path d="M12 9v4" /><path d="M12 17h.01" /></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" /><path d="m4.93 4.93 1.41 1.41" /><path d="m17.66 17.66 1.41 1.41" /><path d="M2 12h2" /><path d="M20 12h2" /><path d="m6.34 17.66-1.41 1.41" /><path d="m19.07 4.93-1.41 1.41" /></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" /></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14" /></symbol>
+  <symbol id="i-maximize-2" viewBox="0 0 24 24"><path d="M15 3h6v6" /><path d="m21 3-7 7" /><path d="m3 21 7-7" /><path d="M9 21H3v-6" /></symbol>
+  <symbol id="i-minimize-2" viewBox="0 0 24 24"><path d="m14 10 7-7" /><path d="M20 10h-6V4" /><path d="m3 21 7-7" /><path d="M4 14h6v6" /></symbol>
+  <symbol id="i-landmark" viewBox="0 0 24 24"><path d="M10 18v-7" /><path d="M11.119 2.205a2 2 0 0 1 1.762 0l7.84 3.846A.5.5 0 0 1 20.5 7h-17a.5.5 0 0 1-.22-.949z" /><path d="M14 18v-7" /><path d="M18 18v-7" /><path d="M3 22h18" /><path d="M6 18v-7" /></symbol>
+  <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></symbol>
+</svg>
+
 <div class="app-shell">
 
-  <!-- ── Side navigation ─────────────────────────────────────────────────── -->
-  <aside class="sidenav" id="sidenav">
-    <div class="brand">
-      <span class="logo">📈</span>
-      <div class="brand-text">
-        <div class="brand-name">AlphaFunds</div>
-        <div class="brand-sub">Analyst Tracker</div>
-      </div>
-    </div>
-
-    <nav class="nav-group">
-      <div class="nav-label">Markets</div>
-      <button class="tab nav-item active" data-view="feed">
-        <span class="nav-ic">◉</span> Overview
-      </button>
-      <button class="tab nav-item" data-view="leaderboard">
-        <span class="nav-ic">▤</span> Coverage &amp; Leaders
-      </button>
-      <button class="tab nav-item" data-view="watchlist">
-        <span class="nav-ic">★</span> Watchlist
-      </button>
-      <button class="tab nav-item" data-view="funds">
-        <span class="nav-ic">◫</span> Funds
-      </button>
-      <button class="tab nav-item" data-view="digest">
-        <span class="nav-ic">☰</span> Market Digest
-      </button>
-    </nav>
-
-    <!-- Operations: admin-only — revealed by updateAuthUI() for role=admin -->
-    <nav class="nav-group" id="opsNav" hidden>
-      <div class="nav-label">Operations</div>
-      <button class="tab nav-item" data-view="sre" id="sreTab">
-        <span class="nav-ic">◈</span> SRE Dashboard
-      </button>
-      <button class="tab nav-item nav-admin" data-view="admin" id="adminTab">
-        <span class="nav-ic">🔒</span> Admin
-      </button>
-    </nav>
-
-    <div class="sidenav-foot">
-      <div class="live-status"><span class="live-dot" id="liveDot"></span><span id="feedUpdated">—</span></div>
-    </div>
-  </aside>
-
-  <!-- ── Main column ─────────────────────────────────────────────────────── -->
+  <!-- ── Header: brand, primary navigation, tools; filters beneath ───────── -->
   <div class="main-col">
-
     <header class="topbar">
-      <div class="search-wrap">
-        <span class="search-ic">⌕</span>
-        <input id="globalSearch" placeholder="Search ticker or company…" autocomplete="off" maxlength="40" />
-        <div id="globalSearchDrop" class="search-drop"></div>
+      <div class="bar-main">
+        <a class="brand" href="/" aria-label="AlphaFunds home">
+          <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect class="mark-bg" width="32" height="32" rx="9"/><path class="mark-fg" d="M9 21l7-9 7 9"/></svg>
+          <span class="brand-name">AlphaFunds</span>
+        </a>
+
+        <nav class="topnav" id="sidenav" aria-label="Primary">
+          <button class="tab nav-item active" data-view="feed">Overview</button>
+          <button class="tab nav-item" data-view="leaderboard">Coverage &amp; Leaders</button>
+          <button class="tab nav-item" data-view="watchlist">Watchlist</button>
+          <button class="tab nav-item" data-view="funds">Funds</button>
+          <button class="tab nav-item" data-view="digest">Market Digest</button>
+          <!-- Operations: admin-only — revealed by updateAuthUI() for role=admin -->
+          <span class="nav-sep" id="opsNav" data-admin-only hidden></span>
+          <button class="tab nav-item" data-view="sre" id="sreTab" data-admin-only hidden>SRE</button>
+          <button class="tab nav-item nav-admin" data-view="admin" id="adminTab" data-admin-only hidden>Admin</button>
+        </nav>
+
+        <div class="bar-tools">
+          <button id="chatFab" class="btn-primary" type="button" aria-expanded="false" aria-controls="chatPanel" title="Ask AI about these stocks"><svg class="ic" aria-hidden="true"><use href="#i-sparkles"/></svg><span>Ask AI</span></button>
+          <button id="themeToggle" class="iconbtn" type="button" aria-label="Switch to dark theme" title="Switch theme"><svg class="ic i-moon" aria-hidden="true"><use href="#i-moon"/></svg><svg class="ic i-sun" aria-hidden="true"><use href="#i-sun"/></svg></button>
+
+          <div class="acct">
+            <button id="avatarBtn" class="avatar" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="acctMenu" aria-label="Account and settings"><span id="avatarInit"><svg class="ic" aria-hidden="true"><use href="#i-circle-user"/></svg></span></button>
+            <div id="acctMenu" class="acct-menu" hidden>
+              <div class="acct-who" id="userMenu" hidden>
+                <div class="acct-name" id="userName"></div>
+                <div class="acct-email" id="userEmail"></div>
+              </div>
+              <button id="signIn" class="menu-item" type="button" hidden><svg class="ic sm" aria-hidden="true"><use href="#i-log-in"/></svg><span>Sign in</span></button>
+              <button id="refreshMenu" class="menu-item menu-mobile-only" type="button"><svg class="ic sm" aria-hidden="true"><use href="#i-refresh-cw"/></svg><span>Refresh data</span></button>
+              <button id="factsToggle" class="menu-item facts-toggle" type="button" aria-pressed="true" title="Market facts while you wait: on"><svg class="ic sm" aria-hidden="true"><use href="#i-lightbulb"/></svg><span class="grow">Market facts</span><span class="switch" aria-hidden="true"></span></button>
+              <button id="waConnect" class="menu-item" type="button" title="Get answers on WhatsApp" hidden><svg class="ic sm" aria-hidden="true"><use href="#i-smartphone"/></svg><span>Connect WhatsApp</span></button>
+              <div class="menu-mobile-only menu-sep" data-admin-only hidden></div>
+              <button class="tab menu-item menu-mobile-only nav-admin" data-view="sre" data-admin-only hidden><svg class="ic sm" aria-hidden="true"><use href="#i-activity"/></svg><span>SRE dashboard</span></button>
+              <button class="tab menu-item menu-mobile-only nav-admin" data-view="admin" data-admin-only hidden><svg class="ic sm" aria-hidden="true"><use href="#i-lock"/></svg><span>Admin</span></button>
+              <div class="menu-sep" id="logoutSep" hidden></div>
+              <button id="logout" class="menu-item" type="button" title="Log out" hidden><svg class="ic sm" aria-hidden="true"><use href="#i-log-out"/></svg><span>Log out</span></button>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <div class="actions">
-        <select id="market" title="Market">
-          <option value="us">🇺🇸 US</option>
-          <option value="in">🇮🇳 India</option>
+      <div class="bar-filters">
+        <div class="search-wrap">
+          <svg class="ic sm search-ic" aria-hidden="true"><use href="#i-search"/></svg>
+          <input id="globalSearch" placeholder="Search ticker or company…" aria-label="Search ticker or company" autocomplete="off" maxlength="40" />
+          <div id="globalSearchDrop" class="search-drop"></div>
+        </div>
+
+        <!-- Segmented controls front the selects below; the selects stay the
+             single source of truth that app.js reads. -->
+        <div class="seg" role="group" aria-label="Market" data-for="market">
+          <button type="button" data-v="us" aria-pressed="true">US</button>
+          <button type="button" data-v="in" aria-pressed="false">India</button>
+        </div>
+        <div class="seg" role="group" aria-label="Time window" data-for="days">
+          <button type="button" data-v="1" aria-pressed="false">Today</button>
+          <button type="button" data-v="7" aria-pressed="true">7d</button>
+          <button type="button" data-v="30" aria-pressed="false">30d</button>
+        </div>
+        <select id="market" title="Market" hidden>
+          <option value="us">US</option>
+          <option value="in">India</option>
         </select>
-        <select id="theme" title="Segment">
-          <option value="">All segments</option>
-        </select>
-        <select id="days" title="Window">
+        <select id="days" title="Window" hidden>
           <option value="1">Today</option>
           <option value="7" selected>7 days</option>
           <option value="30">30 days</option>
         </select>
-        <button id="refresh" title="Fetch latest analyst data now"><span class="refresh-ic">↻</span> Refresh</button>
-        <button id="factsToggle" class="ghost-btn facts-toggle" type="button"
-                aria-pressed="true" title="Market facts while you wait: on">💡 Facts</button>
-        <button id="signIn" class="ghost-btn" hidden>Sign in</button>
-        <div class="user-menu" id="userMenu" hidden>
-          <span class="user-name" id="userName"></span>
-          <button id="waConnect" class="ghost-btn" title="Get answers on WhatsApp">📱 WhatsApp</button>
-          <button id="logout" class="ghost-btn" title="Log out">Log out</button>
-        </div>
+        <label class="sel">
+          <select id="theme" title="Segment" aria-label="Segment">
+            <option value="">All segments</option>
+          </select>
+          <svg class="ic xs" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+        </label>
+        <button id="refresh" class="iconbtn" type="button" aria-label="Fetch latest analyst data now" title="Fetch latest analyst data now"><svg class="ic" aria-hidden="true"><use href="#i-refresh-cw"/></svg></button>
+        <div class="live-status"><span class="live-dot" id="liveDot"></span><span id="feedUpdated">—</span></div>
       </div>
     </header>
 
-    <section class="stats" id="stats"></section>
+    <section class="stats" id="stats" aria-label="Market snapshot"></section>
     <section class="highlights" id="highlights"></section>
 
     <main>
@@ -102,11 +154,21 @@
   </div>
 </div>
 
+<!-- Mobile tab bar: same .tab[data-view] buttons as the header nav, so the
+     active state stays in sync from one render() call. -->
+<nav class="tabbar" aria-label="Primary">
+  <button class="tab active" data-view="feed"><svg class="ic" aria-hidden="true"><use href="#i-layout-dashboard"/></svg><span>Overview</span></button>
+  <button class="tab" data-view="leaderboard"><svg class="ic" aria-hidden="true"><use href="#i-chart-column"/></svg><span>Leaders</span></button>
+  <button class="tab" data-view="watchlist"><svg class="ic" aria-hidden="true"><use href="#i-star"/></svg><span>Watchlist</span></button>
+  <button class="tab" data-view="funds"><svg class="ic" aria-hidden="true"><use href="#i-chart-pie"/></svg><span>Funds</span></button>
+  <button class="tab" data-view="digest"><svg class="ic" aria-hidden="true"><use href="#i-newspaper"/></svg><span>Digest</span></button>
+</nav>
+
 <!-- Auth overlay: dismissible — browsing is free, login only to save a watchlist -->
 <div class="auth-overlay" id="authOverlay">
   <div class="auth-card">
-    <button class="auth-close" id="authClose" title="Close" aria-label="Close">✕</button>
-    <div class="auth-brand"><span class="logo">📈</span> AlphaFunds</div>
+    <button class="auth-close" id="authClose" title="Close" aria-label="Close"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+    <div class="auth-brand"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect class="mark-bg" width="32" height="32" rx="9"/><path class="mark-fg" d="M9 21l7-9 7 9"/></svg> AlphaFunds</div>
     <p class="auth-tagline">Sign in to save stocks to your own watchlist. Browsing is free.</p>
     <div class="auth-tabs">
       <button class="auth-tab active" data-mode="login">Log in</button>
@@ -135,13 +197,13 @@
 <!-- Welcome popup — shown once per browser, dismissed to localStorage -->
 <div id="welcomePopup" class="welcome-overlay" hidden>
   <div class="welcome-card">
-    <button class="welcome-close" id="welcomeClose" aria-label="Close">✕</button>
-    <div class="welcome-title">👋 Welcome to AlphaFunds</div>
+    <button class="welcome-close" id="welcomeClose" aria-label="Close"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+    <div class="welcome-title">Welcome to AlphaFunds</div>
     <ul class="welcome-features">
-      <li>📊 <strong>Live consensus</strong> — Buy / Hold / Sell ratings aggregated from 100s of analysts across US &amp; India stocks, updated daily.</li>
-      <li>🎯 <strong>Target hit tracking</strong> — See which analyst price targets were actually hit so you know who to trust.</li>
-      <li>💬 <strong>Ask AI</strong> — Chat with our AI assistant about any stock or the live feed using your real analyst data.</li>
-      <li>★ <strong>Personal watchlist</strong> — Pin stocks and track your entry price vs current value. <em>Free sign-up required.</em></li>
+      <li><svg class="ic sm" aria-hidden="true"><use href="#i-chart-column"/></svg><span><strong>Live consensus</strong> — Buy / Hold / Sell ratings aggregated from 100s of analysts across US &amp; India stocks, updated daily.</span></li>
+      <li><svg class="ic sm" aria-hidden="true"><use href="#i-check"/></svg><span><strong>Target hit tracking</strong> — See which analyst price targets were actually hit so you know who to trust.</span></li>
+      <li><svg class="ic sm" aria-hidden="true"><use href="#i-sparkles"/></svg><span><strong>Ask AI</strong> — Chat with our AI assistant about any stock or the live feed using your real analyst data.</span></li>
+      <li><svg class="ic sm" aria-hidden="true"><use href="#i-star"/></svg><span><strong>Personal watchlist</strong> — Pin stocks and track your entry price vs current value. <em>Free sign-up required.</em></span></li>
     </ul>
     <button class="welcome-got-it" id="welcomeGotIt">Got it — show me the data</button>
   </div>
@@ -150,33 +212,32 @@
 <!-- Connect WhatsApp dialog -->
 <div class="wa-overlay" id="waOverlay" hidden>
   <div class="wa-card">
-    <button class="wa-close" id="waClose" aria-label="Close">✕</button>
-    <div class="wa-title">📱 Get AlphaFunds on WhatsApp</div>
+    <button class="wa-close" id="waClose" aria-label="Close"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+    <div class="wa-title"><svg class="ic" aria-hidden="true"><use href="#i-smartphone"/></svg> Get AlphaFunds on WhatsApp</div>
     <p class="wa-sub">Link once, then ask anything from your phone — "top buys today", "how's NVDA?", "which analysts are most accurate?" — no need to open the site.</p>
     <div id="waBody"><div class="loading">Generating your link code…</div></div>
     <p class="wa-legal">Analysis, not investment advice. Reply STOP on WhatsApp anytime to unsubscribe.</p>
   </div>
 </div>
 
-<!-- Ask-AI floating assistant -->
-<button id="chatFab" class="chat-fab" title="Ask AI about these stocks"><span class="fab-ic">✦</span> Ask AI</button>
+<!-- Ask-AI assistant (opened from the header button) -->
 <div id="chatPanel" class="chat-panel" hidden>
   <div class="chat-head">
-    <span>✦ Ask AI <small id="chatScope"></small></span>
+    <span class="chat-title"><svg class="ic sm" aria-hidden="true"><use href="#i-sparkles"/></svg> Ask AI <small id="chatScope"></small></span>
     <div class="chat-head-btns">
-      <button id="chatMin" class="chat-x" title="Minimize" aria-label="Minimize">—</button>
-      <button id="chatMax" class="chat-x" title="Maximize" aria-label="Maximize">⤢</button>
-      <button id="chatClose" class="chat-x" title="Close" aria-label="Close">✕</button>
+      <button id="chatMin" class="chat-x" title="Minimize" aria-label="Minimize"><svg class="ic sm" aria-hidden="true"><use href="#i-minus"/></svg></button>
+      <button id="chatMax" class="chat-x" title="Maximize" aria-label="Maximize"><svg class="ic sm" aria-hidden="true"><use href="#i-maximize-2"/></svg></button>
+      <button id="chatClose" class="chat-x" title="Close" aria-label="Close"><svg class="ic sm" aria-hidden="true"><use href="#i-x"/></svg></button>
     </div>
   </div>
   <div id="chatLog" class="chat-log">
     <div class="chat-msg bot chat-intro">
-      👋 I answer questions grounded in real data. I can help with:
+      I answer questions grounded in real data. I can help with:
       <ul class="chat-can">
-        <li>📊 <strong>Analyst consensus</strong> — buy/hold/sell, price targets &amp; who's most accurate</li>
-        <li>🏢 <strong>Any stock's profile</strong> — fundamentals (P/E, market cap, sector) for any company, even ones we don't track</li>
-        <li>📰 <strong>Company news</strong> — "latest on Apple", "why is NVDA falling?" (live web)</li>
-        <li>◫ <strong>Funds</strong> — holdings, expense ratio, what's driving returns</li>
+        <li><svg class="ic sm" aria-hidden="true"><use href="#i-chart-column"/></svg><span><strong>Analyst consensus</strong> — buy/hold/sell, price targets &amp; who's most accurate</span></li>
+        <li><svg class="ic sm" aria-hidden="true"><use href="#i-landmark"/></svg><span><strong>Any stock's profile</strong> — fundamentals (P/E, market cap, sector) for any company, even ones we don't track</span></li>
+        <li><svg class="ic sm" aria-hidden="true"><use href="#i-newspaper"/></svg><span><strong>Company news</strong> — "latest on Apple", "why is NVDA falling?" (live web)</span></li>
+        <li><svg class="ic sm" aria-hidden="true"><use href="#i-chart-pie"/></svg><span><strong>Funds</strong> — holdings, expense ratio, what's driving returns</span></li>
       </ul>
       <span class="chat-note">Analysis, not investment advice. I stick to stocks &amp; funds — I won't do general chat.</span>
     </div>
@@ -193,6 +254,6 @@
   </form>
 </div>
 
-<script src="/app.js?v=39"></script>
+<script src="/app.js?v=40"></script>
 </body>
 </html>

@@ -1,10 +1,15 @@
 # AlphaFunds — Engineering Handoff
 
-*Written 30 September 2026. Current as of commit `c605b9d`.*
+*Written 30 September 2026. Reorganised around the `docs/` knowledge base on 2 October 2026.*
 
 This is the single entry point for anyone taking over this codebase — human or
 AI. Read this first, then `CLAUDE.md` (the working agreement that applies to
 every change) and `BACKLOG.md` (what is known-broken and what is planned).
+
+**Detail lives in [`docs/`](docs/README.md).** This document is the narrative and the
+overview; for the rules of a specific feature, the schema, the API, decision records,
+runbooks or the security policy, go to the matching folder there. Where this document and
+`docs/` disagree, `docs/` is the one that is kept current.
 
 **What the product is.** AlphaFunds tracks daily US and Indian analyst stock
 recommendations, records them append-only, and later scores whether the calls
@@ -153,7 +158,7 @@ app/            backend (see the component table above)
 web/            frontend — index.html, app.js, styles.css (no build step)
 tests/          31 test modules + conftest.py
 scripts/        run_daily.py, seed_demo.py, compare_models.py
-docs/           six older design docs (see §6)
+docs/           knowledge base: design, architecture, schemas, api, security, adr, workflows
 CLAUDE.md       working agreement — READ THIS
 BACKLOG.md      security findings + roadmap
 Dockerfile      production image
@@ -290,11 +295,16 @@ stderr. Almost all of it is `INFO`. Don't be alarmed by a wall of red.
 
 ### Known production issues
 
-- **Memory growth.** RSS resets on deploy then climbs (~32 MB/day observed:
-  0.44 GB → 1.18 GB → 1.97 GB over a month). Three unbounded caches were fixed
-  in `c605b9d` along with `MALLOC_ARENA_MAX=2`; **whether that flattens the
-  curve is still unverified.** Watch the slope, not a single reading.
-- **Cost.** ~$24/month, almost entirely memory. Target is $5–12.
+- **Memory growth: fixed, with one confirmation outstanding.** RSS used to reset on
+  deploy then climb (~32 MB/day: 0.44 GB → 1.18 GB → 1.97 GB over a month). Three
+  unbounded caches were bounded in `c605b9d` along with `MALLOC_ARENA_MAX=2`
+  ([ADR 0010](docs/adr/0010-bounded-caches.md)). At +24h the 6h and 12h windows had
+  identical floors and ceilings (0.3844–0.3994 GB), which a leak would contradict; a
+  +72h confirmation was scheduled. Watch the slope, not a single reading
+  ([runbook](docs/workflows/memory-investigation.md)).
+- **Cost.** Was ~$24/month, almost entirely memory. At ~0.39 GB resident the implied
+  figure is ~$5/month, but billing is in arrears so the invoice lags
+  ([how to read it](docs/workflows/cost-check.md)).
 - **Security.** `BACKLOG.md` P1 lists S1–S12, several still open, including one
   rated Critical. **Read that list before putting this in front of more users.**
   Note the repository is public.
@@ -431,13 +441,17 @@ latency to the very thing it exists to mask.
 - **The `esc()` helper does not escape `'`** (`BACKLOG.md` S11). Safe today only
   because it is used with double-quoted attributes.
 
-### Older design docs
+### Knowledge base
 
-`docs/` holds six documents from earlier phases: `ENTERPRISE_ANALYSIS.md`,
-`RAG_AND_MONITORING_DESIGN.md`, `BOTTLENECK_FIX_PLAN.md`, `UI_REDESIGN.md`,
-`TEAMOPS_DESIGN.md`, `SESSION_CONTEXT.md`. They are useful for intent but
-**partly superseded** — `SESSION_CONTEXT.md` in particular is a July snapshot.
-Trust this document and the code over those.
+`docs/` is organised by what you are trying to do: `design/` (one file per feature),
+`architecture/`, `schemas/`, `api/openapi.yaml`, `security/policy.md`, `adr/` (the *why* behind
+each decision, including the measurements) and `workflows/` (runbooks). The decisions recorded in
+this section each have an ADR with the full reasoning. Start at [`docs/README.md`](docs/README.md).
+
+The six earlier documents were moved: three into `design/` (RAG and monitoring, UI redesign,
+bottleneck plan) with status banners, and three into `archive/` (the July session snapshot,
+the strategy review, and the separate TeamOps design). They are useful for intent but **partly
+superseded**; trust the code and the current `docs/` over them.
 
 ---
 
@@ -460,11 +474,10 @@ Trust this document and the code over those.
 
 ### In flight
 
-- **Memory growth.** Fixed-and-unverified as of `c605b9d`. The next action is
-  to measure the slope at +1h / +24h / +72h after that deploys. If it is still
-  ~32 MB/day, the caches were not the main cause and the remaining suspect is
-  allocator fragmentation; a scheduled restart is the pragmatic cap.
-- This handoff document.
+- **Memory growth.** Fixed in `c605b9d`; flat at +24h. Remaining action: the +72h
+  confirmation. If the floor has risen, profile with `tracemalloc` before changing
+  anything, and only then consider a scheduled restart as a hard cap.
+- The `docs/` knowledge base (this reorganisation).
 
 ### Technical debt
 

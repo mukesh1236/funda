@@ -1,5 +1,9 @@
 # Funda — Enterprise Comparison & Strategic Roadmap
 
+> **Archived.** A strategy and career-roadmap review written 2026-07-11. It is product
+> strategy, not engineering documentation, and its market claims have since been revisited.
+> Kept for history.
+
 *An architect + business review of the Analyst Recommendation Tracker. Written 2026-07-11.*
 
 ---

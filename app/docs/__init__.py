@@ -32,7 +32,7 @@ def get_fetcher(symbol: str, market: str = "us") -> Optional[DocFetcher]:
         from app.docs.edgar import EdgarFundDocs
         return EdgarFundDocs()
     if m == "in":
-        # India service not built yet — see docs/ plan, Stage 8.
+        # India service not built yet — see docs/design/fund-factsheets.md ("India").
         return None
     return None
 

@@ -37,12 +37,18 @@ The scales are now closed sets, defined as tokens at the top of
   button) — leave those alone.
 - **Radius** — `--radius-xs` 4 / `--radius-sm` 8 / `--radius` 12 /
   `--radius-pill`.
-- **Colour** — always a `:root` token, never a raw hex/rgba. New chart or
-  status colours must be contrast-checked against the dark surface first.
-- **Panels** — a block of content sits in the glass card the rest of the page
-  uses (`background: var(--bg-glass)`, `1px solid var(--border)`,
-  `border-radius: var(--radius)`, `backdrop-filter: blur(10px)`). A panel
-  floating bare beside carded siblings reads as unfinished.
+- **Colour** — always a `:root` token, never a raw hex/rgba. Every token has a light
+  value on `:root` and a dark value in **both** dark blocks (`prefers-color-scheme` and
+  `[data-theme="dark"]`, kept identical). New colours must pass
+  `tests/test_design_tokens.py` (WCAG AA in both themes); it also fails on a raw colour
+  outside the token blocks and on light/dark drift.
+- **Panels** — a block of content sits in the card the rest of the page uses
+  (`background: var(--surface)`, `1px solid var(--border)`, `border-radius: var(--radius)`,
+  `box-shadow: var(--shadow)`). A panel floating bare beside carded siblings reads as
+  unfinished. Legacy `--bg-glass` still works as an alias.
+- **Icons** — from the inline SVG sprite in `web/index.html` (`icon('name')` in JS). No
+  emoji or text glyphs as icons in new UI. Add a new symbol to the sprite (Lucide, ISC).
+- **Gain / loss** — never colour alone; pair it with an arrow, sign or word.
 
 Adding a step to a scale is a design decision — make it in the token block with
 a reason, not inline. Audit any time (should print only the values above):
@@ -57,6 +63,34 @@ Judgement still beats the scale: a value sitting between two steps should round
 to whichever keeps the layout intact — nav items went to 13px, not 15px,
 because "Coverage & Leaders" wraps in the 218px rail at 15px. Check the browser,
 don't just check the number.
+
+## Knowledge base (`docs/`)
+
+Look here before searching the code, and **update it in the same change** as the code it
+describes. Index: [`docs/README.md`](docs/README.md). For a narrative tour,
+[`HANDOFF.md`](HANDOFF.md).
+
+| You are about to... | Read first |
+|---|---|
+| Touch a feature | its file in `docs/design/` (rules that must not change, edge cases) |
+| Change the database | `docs/schemas/entities.md`, then `docs/workflows/add-a-column.md` |
+| Add or change an API status or `source` value | `docs/schemas/error-codes.md` |
+| Add a route | regenerate `docs/api/openapi.yaml` (below) |
+| Pick a technology or reverse a past decision | `docs/adr/` (do not rewrite an accepted ADR; supersede it) |
+| Deploy, roll back, or chase memory/cost | `docs/workflows/` |
+| Touch auth, secrets, or anything exposed publicly | `docs/security/policy.md` |
+
+**Generated, never hand-edited:** `docs/api/openapi.yaml` (`python scripts/export_openapi.py`)
+and the table reference in `docs/schemas/entities.md` (`python scripts/export_schema_doc.py`).
+`tests/test_docs_in_sync.py` fails if a route or table is added without regenerating, and
+if a relative link in the docs stops resolving.
+
+**Keeping it honest:** a new ADR for any decision that was measured or argued over; a runbook
+for anything operational done twice; mark claims you could not verify (the sandbox cannot reach
+`sec.gov`) as unverified rather than writing them as fact.
+
+**The repository is public.** Do not put attack mechanics, credentials, or infrastructure IDs
+in `docs/`, `BACKLOG.md`, or commit messages. Reference security items by ID and severity.
 
 ## Project shape (quick orientation)
 

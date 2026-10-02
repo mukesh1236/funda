@@ -1,5 +1,10 @@
 # Bottleneck Fix Plan
 
+> **Status: not re-audited.** Written 2026-07-11. Some of this has since been done and the
+> code has moved on, so verify a finding against the current code before acting on it.
+> Hosting cost turned out to be driven by resident memory, not the request-path items here
+> ([`workflows/cost-check.md`](../workflows/cost-check.md)).
+
 *Code-level performance review of the current application. Written 2026-07-11.
 Every finding below cites the actual file/line it lives in.*
 
