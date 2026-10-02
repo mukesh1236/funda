@@ -36,9 +36,9 @@ One seam in `web/app.js`:
    `factsheet`, `holdings`, `xray`, `drivers`, `compare`, `stock`, `analysts`, and
    a `default`.
 4. **User control.** Facts are on by default. A **Hide** link on the fact switches
-   them off; a **💡 Facts** toggle in the header (beside Refresh) switches them back
-   on. It lives in the header rather than the sidebar rail because the rail is
-   hidden on mobile.
+   them off; a **Market facts** switch in the account menu (the avatar in the header)
+   switches them back on. The menu is reachable on mobile too, which is why it is not
+   a desktop-only control.
 5. **Failure must not matter.** The preference is `localStorage['facts_enabled']`,
    defaulting to on. Every access is wrapped in try/catch because `localStorage`
    throws in private windows and when site data is blocked.

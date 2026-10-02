@@ -3,18 +3,21 @@ const API = ''; // same origin
 // Catch all uncaught JS errors and show them visibly so we can diagnose
 window.onerror = (msg, src, line, col, err) => {
   const d = document.getElementById('content') || document.body;
-  d.innerHTML = `<div style="color:#f87171;background:#1e293b;padding:20px;border-radius:8px;margin:20px;font-family:monospace">
+  d.innerHTML = `<div style="color:var(--loss);background:var(--surface-2);padding:20px;border-radius:8px;margin:20px;font-family:monospace">
     <b>JS Error (line ${line}):</b> ${msg}<br><pre>${err?.stack || ''}</pre></div>`;
 };
 window.onunhandledrejection = (e) => {
   const d = document.getElementById('content') || document.body;
-  d.innerHTML = `<div style="color:#f87171;background:#1e293b;padding:20px;border-radius:8px;margin:20px;font-family:monospace">
+  d.innerHTML = `<div style="color:var(--loss);background:var(--surface-2);padding:20px;border-radius:8px;margin:20px;font-family:monospace">
     <b>Unhandled Promise Error:</b> ${e.reason?.message || e.reason}<br><pre>${e.reason?.stack || ''}</pre></div>`;
 };
 
 const $ = (s) => document.querySelector(s);
 const el = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; };
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// Inline SVG icon from the sprite in index.html (Lucide, ISC licence).
+const icon = (name, cls = 'ic') => `<svg class="${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
 let view = 'feed';
 const detailCache = {};
@@ -205,51 +208,52 @@ function scoreBadge(n) {
   const cls = n > 0 ? 'score-pos' : n < 0 ? 'score-neg' : 'score-zero';
   return `<span class="badge ${cls}">${n > 0 ? '+' : ''}${n}</span>`;
 }
-function countsCell(s) {
-  // Buy-vs-sell strength meter under the counts: proportional fill with a
-  // 2px surface gap between the two segments (dataviz spacer rule).
-  const total = s.buy_count + s.sell_count;
-  const meter = total > 0 ? `
-    <span class="meter" title="${s.buy_count} buy vs ${s.sell_count} sell">
-      <span class="m-buy" style="width:${(s.buy_count / total * 100).toFixed(1)}%"></span>
-      <span class="m-gap"></span>
-      <span class="m-sell" style="width:${(s.sell_count / total * 100).toFixed(1)}%"></span>
-    </span>` : '';
-  return `<span class="counts">
-    <span class="pill b">${s.buy_count} B</span>
-    <span class="pill h">${s.hold_count} H</span>
-    <span class="pill s">${s.sell_count} S</span>${meter}</span>`;
+// Proportional buy / hold / sell bar with the score and counts beneath. Hold is
+// a neutral track, so the bar still reads when buy and sell are both small.
+function consBar(s) {
+  const t = Math.max(s.total_count, 1);
+  const w = (n) => (n / t * 100).toFixed(1);
+  return `<div class="bar" role="img" aria-label="${s.buy_count} buy, ${s.hold_count} hold, ${s.sell_count} sell"><i class="b" style="width:${w(s.buy_count)}%"></i><i class="h" style="width:${w(s.hold_count)}%"></i><i class="s" style="width:${w(s.sell_count)}%"></i></div>`;
 }
+function consCell(s) {
+  const sc = s.consensus_score;
+  const cls = sc > 0 ? 'gain' : sc < 0 ? 'loss' : '';
+  return `<div class="cons">${consBar(s)}
+    <div class="cons-t"><b class="${cls}">${sc > 0 ? '+' : ''}${sc}</b><span class="num">${s.buy_count}B · ${s.hold_count}H · ${s.sell_count}S</span></div></div>`;
+}
+// Gain/loss is never colour alone: an arrow carries direction too.
 function ret(v) {
-  if (v == null) return '<span class="muted">—</span>';
-  return `<span class="${v >= 0 ? 'r-pos' : 'r-neg'}">${v >= 0 ? '+' : ''}${v}%</span>`;
+  if (v == null) return '<span class="na">—</span>';
+  const up = v >= 0;
+  return `<span class="${up ? 'r-pos' : 'r-neg'}">${icon(up ? 'arrow-up' : 'arrow-down', 'ic xs')}${Math.abs(v)}%</span>`;
 }
 function confBadge(c) {
-  if (!c) return '<span class="muted">—</span>';
+  if (!c) return '<span class="na">—</span>';
   const cls = { High: 'cf-high', Medium: 'cf-med', Low: 'cf-low' }[c.label] || 'cf-med';
-  return `<span class="conf ${cls}" title="${esc(c.rationale)}">${c.label} ${Math.round(c.score)}</span>`;
+  return `<span class="conf ${cls}" title="${esc(c.rationale)}"><i></i>${esc(c.label)} <span class="num">${Math.round(c.score)}</span></span>`;
 }
-const _AVATAR_HUES = [212, 158, 32, 265, 130, 350, 20, 190];   // deterministic per ticker
+// A neutral monogram tile — not a per-ticker hue, which would need a second
+// palette to stay legible in dark mode and carries no information anyway.
 function tickAvatar(sym) {
-  let h = 0;
-  for (const ch of sym) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  const hue = _AVATAR_HUES[h % _AVATAR_HUES.length];
-  return `<span class="tick-avatar" style="background:hsl(${hue} 55% 38%)">${esc(sym.slice(0, 3))}</span>`;
+  return `<span class="tick-avatar" aria-hidden="true">${esc(sym.slice(0, 3))}</span>`;
 }
 function stockCell(s) {
-  return `<span class="caret">▶</span>${tickAvatar(s.symbol)}<span class="tick">${esc(s.symbol)}</span>
-    <span class="name">${esc(s.company_name || '')}</span> ${scoreBadge(s.consensus_score)}`;
+  return `<span class="stk">${icon('chevron-right', 'ic xs caret')}${tickAvatar(s.symbol)}
+    <span class="stk-text"><b class="tick">${esc(s.symbol)}</b><em>${esc(s.company_name || '')}</em></span></span>`;
 }
 function statusChip(o) {
-  if (!o || !o.status) return '<span class="muted">—</span>';
+  if (!o || !o.status) return '<span class="na">—</span>';
   const map = { hit: 'st-hit', missed: 'st-missed', pending: 'st-pending', expired: 'st-expired' };
   const pct = (o.pct_to_target != null) ? ` (${o.pct_to_target > 0 ? '+' : ''}${o.pct_to_target}%)` : '';
   return `<span class="status-chip ${map[o.status] || 'st-pending'}">${o.status}${pct}</span>`;
 }
 
 function themeTags(themes) {
-  if (!themes || !themes.length) return '<span class="muted">—</span>';
-  return `<span class="themes">${themes.map(t => `<span class="theme-tag">${esc(t)}</span>`).join('')}</span>`;
+  if (!themes || !themes.length) return '<span class="na">—</span>';
+  // Two tags then "+N": three or four long segment names would be wider than
+  // the rest of the row put together. The full list stays in the tooltip.
+  const shown = themes.slice(0, 2), more = themes.length - shown.length;
+  return `<span class="themes" title="${esc(themes.join(', '))}">${shown.map(t => `<span class="theme-tag">${esc(t)}</span>`).join('')}${more > 0 ? `<span class="theme-tag more">+${more}</span>` : ''}</span>`;
 }
 
 function currentMarket() { return $('#market').value || 'us'; }
@@ -264,49 +268,78 @@ async function loadThemes() {
   } catch (e) { /* best-effort */ }
 }
 
-async function loadStats() {
-  try {
-    const h = await getJSON('/api/health');
-    $('#stats').innerHTML = '';
-    const lastUpd = h.last_updated || 'never';
-    const sched = h.scheduler ? `on · ${h.daily_run_time || ''}` : 'off';
-    const boxes = [
-      ['Stocks tracked', h.universe_size, 'Number of stocks we collect analyst ratings for'],
-      ['Data sources', (h.sources || []).length, `Active sources: ${(h.sources || []).join(', ') || 'none'}`],
-      ['Auto-refresh', sched, h.scheduler ? `Runs daily at ${h.daily_run_time} server time` : 'Daily job is off'],
-      ['Last updated', lastUpd, 'Date the daily collect + validation job last ran'],
-    ];
-    boxes.forEach(([l, v, tip]) =>
-      $('#stats').appendChild(el(
-        `<div class="stat" title="${esc(tip)}"><div class="v">${esc(String(v))}</div><div class="l">${esc(l)}</div></div>`)));
-  } catch (e) { /* best-effort */ }
+// The Overview's headline row describes the MARKET, derived only from the feed
+// payload already fetched — no extra request and nothing invented. System facts
+// (stocks tracked, sources, scheduler) belong to the admin views.
+function renderKpis(stocks, h) {
+  const box = $('#stats');
+  if (!stocks.length) { box.innerHTML = ''; return; }
+  const n = stocks.length;
+  const netBuy = stocks.filter(s => s.consensus_score > 0).length;
+  const buys = stocks.reduce((a, s) => a + s.buy_count, 0);
+  const total = stocks.reduce((a, s) => a + s.total_count, 0);
+  const top = (h && h.top_buy) || stocks.reduce((a, s) => (s.consensus_score > a.consensus_score ? s : a), stocks[0]);
+  const st = stocks.map(s => s.outcome && s.outcome.status);
+  const hit = st.filter(x => x === 'hit').length;
+  const resolved = hit + st.filter(x => x === 'missed').length;
+  const sign = (v) => v > 0 ? `<span class="gain">+${v}</span>` : v < 0 ? `<span class="loss">${v}</span>` : `<span>${v}</span>`;
+  const tiles = [
+    ['Net-buy names', `${netBuy}<span class="of"> / ${n}</span>`, 'consensus score above zero',
+      'Stocks whose buy ratings outnumber their sell ratings'],
+    ['Buy ratings', total ? `${Math.round(buys / total * 100)}%` : '—', `of ${total.toLocaleString()} analyst ratings`,
+      'Share of all analyst ratings in this view that are buys'],
+    ['Strongest consensus', `${esc(top.symbol)} ${sign(top.consensus_score)}`,
+      `${top.buy_count} buy · ${top.hold_count} hold · ${top.sell_count} sell`,
+      'Highest consensus score: buy ratings minus sell ratings'],
+    ['Targets hit', resolved ? `${Math.round(hit / resolved * 100)}%` : '—',
+      resolved ? `${hit} of ${resolved} resolved calls` : 'no resolved calls yet',
+      'Share of resolved analyst price targets that were reached'],
+  ];
+  box.innerHTML = tiles.map(([l, v, s, tip]) =>
+    `<div class="stat" title="${esc(tip)}"><div class="l">${esc(l)}</div><div class="v">${v}</div><div class="s">${esc(s)}</div></div>`).join('');
+}
+
+// Views other than the Overview own the whole page below the header.
+function clearOverview() {
+  $('#stats').innerHTML = '';
+  $('#highlights').innerHTML = '';
+}
+
+function _actClass(action) {
+  const a = String(action || '').toLowerCase();
+  if (/buy|upgrade|outperform|overweight|accumulate/.test(a)) return 'pos';
+  if (/sell|downgrade|underperform|underweight|reduce/.test(a)) return 'neg';
+  return '';
 }
 
 function renderHighlights(h) {
   const box = $('#highlights');
   if (!h || (!h.top_buzzed?.length && !h.top_buy && !h.top_sell && !h.top_movers?.length)) { box.innerHTML = ''; return; }
-  const card = (cls, label, s, meta) => s ? `
+  const title = (ic, label, hint) =>
+    `<h3 class="hl-title">${icon(ic)}${label}${hint ? ` <span class="hl-hint">${hint}</span>` : ''}</h3>`;
+  const card = (cls, ic, label, s, meta) => s ? `
     <div class="hl ${cls}">
-      <div class="label">${label}</div>
-      <div class="sym">${s.symbol} ${scoreBadge(s.consensus_score)}</div>
+      ${title(ic, label)}
+      <div class="big">${esc(s.symbol)} <span class="v ${s.consensus_score >= 0 ? 'gain' : 'loss'}">${s.consensus_score > 0 ? '+' : ''}${s.consensus_score}</span></div>
       <div class="meta">${meta}</div>
+      <div class="cons hl-bar">${consBar(s)}<div class="cons-t"><span class="num">${s.buy_count}B · ${s.hold_count}H · ${s.sell_count}S</span></div></div>
     </div>` : '';
 
   const fmtPct = (p) => p >= 0 ? `+${p.toFixed(2)}%` : `${p.toFixed(2)}%`;
   const newsLink = (sym) =>
-    `<a class="why-link" href="https://finance.yahoo.com/quote/${encodeURIComponent(sym)}/news" target="_blank" rel="noopener" title="See news for ${sym}">📰 why?</a>`;
+    `<a class="why-link" href="https://finance.yahoo.com/quote/${encodeURIComponent(sym)}/news" target="_blank" rel="noopener" title="See news for ${esc(sym)}" aria-label="News for ${esc(sym)}">${icon('newspaper', 'ic xs')}<span class="why-txt">News</span></a>`;
 
   // Today's analyst catalysts — the "why" behind moves
   const catalysts = (h.today_catalysts || []).length ? `
     <div class="hl catalysts">
-      <div class="label">📣 Today's analyst calls <span class="hl-hint">click ticker for analyst view</span></div>
+      ${title('megaphone', "Today's analyst calls", 'click a ticker for the analyst view')}
       <ol class="buzzlist catalyst-list">${h.today_catalysts.map(c => {
         const pct = c.day_change_pct != null
           ? `<span class="${c.day_change_pct >= 0 ? 'pct-up' : 'pct-down'}">${fmtPct(c.day_change_pct)}</span>`
           : '';
-        const firm = c.firm ? `<span class="muted">· ${esc(c.firm)}</span>` : '';
-        const tgt  = c.target_price ? `<span class="muted">PT $${c.target_price}</span>` : '';
-        const act  = `<span class="act-badge">${esc(c.action.toUpperCase())}</span>`;
+        const firm = c.firm ? `<span class="firm">${esc(c.firm)}</span>` : '';
+        const tgt  = c.target_price ? `<span class="num pt">PT $${esc(String(c.target_price))}</span>` : '';
+        const act  = `<span class="act-badge ${_actClass(c.action)}">${esc(c.action)}</span>`;
         return `<li>
           <button class="sym-link" onclick="openSymbol('${esc(c.symbol)}')">${esc(c.symbol)}</button>
           ${act} ${firm} ${tgt} ${pct} ${newsLink(c.symbol)}
@@ -316,9 +349,10 @@ function renderHighlights(h) {
 
   const movers = (h.top_movers || []).length ? `
     <div class="hl movers">
-      <div class="label">🚀 Today's movers <span class="hl-hint">click ticker for analyst view</span></div>
+      ${title('trending-up', "Today's movers", 'click a ticker for the analyst view')}
       <ol class="buzzlist">${h.top_movers.map(s => {
-        const pct = s.day_change_pct != null ? `<span class="pct-up">${fmtPct(s.day_change_pct)}</span>` : '';
+        const pct = s.day_change_pct != null
+          ? `<span class="${s.day_change_pct >= 0 ? 'pct-up' : 'pct-down'}">${fmtPct(s.day_change_pct)}</span>` : '';
         return `<li>
           <button class="sym-link" onclick="openSymbol('${esc(s.symbol)}')">${esc(s.symbol)}</button>
           ${pct} ${scoreBadge(s.consensus_score)} ${newsLink(s.symbol)}
@@ -328,26 +362,18 @@ function renderHighlights(h) {
 
   const buzz = (h.top_buzzed || []).length ? `
     <div class="hl buzz">
-      <div class="label">🔥 Most analyst coverage</div>
-      <ol class="buzzlist">${h.top_buzzed.map(s =>
-        `<li><b>${esc(s.symbol)}</b> <span class="muted">${s.total_count} analysts</span> ${scoreBadge(s.consensus_score)}</li>`).join('')}</ol>
+      ${title('flame', 'Most analyst coverage')}
+      <ol class="buzzlist">${h.top_buzzed.map((s, i) =>
+        `<li><span class="rk">${i + 1}</span><button class="sym-link" onclick="openSymbol('${esc(s.symbol)}')">${esc(s.symbol)}</button>
+          <span class="firm">${s.total_count} analysts</span>${scoreBadge(s.consensus_score)}</li>`).join('')}</ol>
     </div>` : '';
 
+  box.classList.toggle('has-movers', !!movers);
   box.innerHTML = catalysts + movers + buzz +
-    card('buy', '⬆ Strongest buy', h.top_buy,
+    card('buy', 'trending-up', 'Strongest buy', h.top_buy,
       h.top_buy ? `${h.top_buy.buy_count} buys${h.top_buy.avg_target ? ' · target $' + h.top_buy.avg_target : ''}` : '') +
-    card('sell', '⬇ Strongest sell', h.top_sell,
+    card('sell', 'trending-down', 'Strongest sell', h.top_sell,
       h.top_sell ? `${h.top_sell.sell_count} sells vs ${h.top_sell.buy_count} buys` : '');
-}
-
-function ownCell(o) {
-  if (!o || (o.inst_pct == null && !o.top_buyer)) return '<span class="muted">—</span>';
-  const inst = o.inst_pct != null ? `${Math.round(o.inst_pct)}% inst` : '';
-  const funds = o.fund_holders ? `${o.fund_holders} funds` : '';
-  const top = [inst, funds].filter(Boolean).join(' · ');
-  const name = o.top_buyer ? (o.top_buyer.length > 18 ? o.top_buyer.slice(0, 17) + '…' : o.top_buyer) : '';
-  const buyer = name ? `<div class="buyer" title="recently increased its stake">↑ ${esc(name)}</div>` : '';
-  return `<div class="own">${top}${buyer}</div>`;
 }
 
 let _lastFeedTime = null;   // Date of last successful feed fetch
@@ -374,7 +400,7 @@ function _scheduleAutoRefresh() {
   // 15 min during market hours, 60 min outside
   const interval = _isMarketOpen(market) ? 15 * 60 * 1000 : 60 * 60 * 1000;
   _autoRefreshTimer = setTimeout(async () => {
-    if (view === 'feed') await loadFeed().catch(() => {});
+    if (view === 'feed') await loadFeed({ quiet: true }).catch(() => {});
     _scheduleAutoRefresh();
   }, interval);
 }
@@ -422,36 +448,41 @@ function _sortedStocks() {
   return [..._feedStocks].sort((a, b) => _feedSort.dir * (key(b) - key(a)));
 }
 
+const _FEED_COLS = 10;   // keep in step with the <th> list below (expand row spans it)
+
 function _renderFeedRows() {
   const sorted = _sortedStocks();
   const r = s => s.returns || {};
   const rows = sorted.map(s => `
-    <tr class="row" data-sym="${s.symbol}">
+    <tr class="row" data-sym="${esc(s.symbol)}" tabindex="0" aria-expanded="false">
       <td class="stockcell">${stockCell(s)}</td>
-      <td>${countsCell(s)}</td>
-      <td>${confBadge(s.confidence)}</td>
-      <td>${s.avg_target != null ? '$' + s.avg_target : '<span class="muted">—</span>'}</td>
-      <td>${ret(r(s).one_month)}</td>
-      <td>${ret(r(s).three_month)}</td>
-      <td>${ret(r(s).six_month)}</td>
-      <td>${ret(r(s).twelve_month)}</td>
-      <td>${ownCell(s.ownership)}</td>
-      <td>${statusChip(s.outcome)}</td>
-      <td>${themeTags(s.themes)}</td>
+      <td>${consCell(s)}</td>
+      <td class="c-conf">${confBadge(s.confidence)}</td>
+      <td class="r num c-tgt">${s.avg_target != null ? '$' + s.avg_target : '<span class="na">—</span>'}</td>
+      <td class="r c-ret">${ret(r(s).one_month)}</td>
+      <td class="r c-ret">${ret(r(s).three_month)}</td>
+      <td class="r c-ret">${ret(r(s).six_month)}</td>
+      <td class="r">${ret(r(s).twelve_month)}</td>
+      <td class="c-stat">${statusChip(s.outcome)}</td>
+      <td class="c-seg">${themeTags(s.themes)}</td>
     </tr>
-    <tr class="expand" data-for="${s.symbol}" style="display:none"><td colspan="11"><div class="expand-inner" data-body="${s.symbol}"></div></td></tr>`).join('');
+    <tr class="expand" data-for="${esc(s.symbol)}" style="display:none"><td colspan="${_FEED_COLS}"><div class="expand-inner" data-body="${esc(s.symbol)}"></div></td></tr>`).join('');
 
-  const th = (col, label) =>
-    `<th class="sortable${_feedSort.col === col ? ' sorted' : ''}" data-scol="${col}">${label} ${_sortArrow(col)}</th>`;
+  const th = (col, label, cls = '') =>
+    `<th class="sortable${cls}${_feedSort.col === col ? ' sorted' : ''}" data-scol="${col}" aria-sort="${_feedSort.col === col ? (_feedSort.dir === 1 ? 'descending' : 'ascending') : 'none'}">${label} ${_sortArrow(col)}</th>`;
 
   $('#content').innerHTML = `
-    <table><thead><tr>
-      <th>Stock</th>
-      ${th('consensus','Consensus')}
-      <th>Confidence</th><th>Avg target</th>
-      ${th('ret1m','1M')}${th('ret3m','3M')}${th('ret6m','6M')}${th('ret12m','12M')}
-      <th>Big investors / funds</th><th>Target status</th><th>Segments</th>
-    </tr></thead><tbody>${rows}</tbody></table>`;
+    <section class="card tbl">
+      <div class="tbl-h"><h3>Analyst consensus</h3>
+        <span class="muted">${sorted.length} stocks · select a row to see which analysts and why</span></div>
+      <div class="scroll"><table><thead><tr>
+        <th>Stock</th>
+        ${th('consensus', 'Consensus')}
+        <th class="c-conf">Confidence</th><th class="r c-tgt">Avg target</th>
+        ${th('ret1m', '1M', ' r c-ret')}${th('ret3m', '3M', ' r c-ret')}${th('ret6m', '6M', ' r c-ret')}${th('ret12m', '12M', ' r')}
+        <th class="c-stat">Target status</th><th class="c-seg">Segments</th>
+      </tr></thead><tbody>${rows}</tbody></table></div>
+    </section>`;
 
   $('#content').querySelectorAll('th.sortable').forEach(th =>
     th.addEventListener('click', () => {
@@ -463,24 +494,66 @@ function _renderFeedRows() {
       }
       _renderFeedRows();
     }));
-  $('#content').querySelectorAll('tr.row').forEach(tr =>
-    tr.addEventListener('click', () => toggleExpand(tr)));
+  $('#content').querySelectorAll('tr.row').forEach(tr => {
+    tr.addEventListener('click', () => toggleExpand(tr));
+    // Rows are the only way into a stock's detail, so they must work from the keyboard.
+    tr.addEventListener('keydown', (e) => {
+      if (e.target !== tr) return;
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleExpand(tr); }
+    });
+  });
 }
 
-async function loadFeed() {
+// ── Loading / empty / error states ───────────────────────────────────────────
+function skeletonFeed() {
+  const row = `<div class="skel-row"><span class="skel" style="width:34px;height:34px"></span>
+    <span class="skel" style="width:22%"></span><span class="skel" style="width:30%"></span>
+    <span class="skel" style="width:12%;margin-left:auto"></span></div>`;
+  $('#stats').innerHTML = Array(4).fill(
+    `<div class="stat"><span class="skel" style="width:50%;height:12px"></span>
+     <span class="skel" style="width:40%;height:28px;margin:12px 0 8px"></span><span class="skel" style="width:70%;height:12px"></span></div>`).join('');
+  $('#content').innerHTML = `<section class="card tbl" aria-busy="true" aria-label="Loading analyst consensus">
+    <div class="tbl-h"><h3>Analyst consensus</h3></div>${row.repeat(8)}</section>`;
+}
+
+// One component for "nothing here" and "something broke", so both look designed.
+function stateHtml({ icon: ic = 'inbox', title, text, action, error = false }) {
+  return `<div class="state${error ? ' is-error' : ''}" role="${error ? 'alert' : 'status'}">
+    <div class="state-ic">${icon(ic, 'ic')}</div>
+    <div class="state-title">${esc(title)}</div>
+    <p class="state-text">${esc(text)}</p>
+    ${action ? `<button class="btn-primary" type="button" data-state-action="${esc(action.id)}">${esc(action.label)}</button>` : ''}
+  </div>`;
+}
+
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-state-action]');
+  if (!b) return;
+  if (b.dataset.stateAction === 'retry') render();
+  if (b.dataset.stateAction === 'refresh') $('#refresh').click();
+});
+
+async function loadFeed({ quiet = false } = {}) {
   const days = $('#days').value;
   const theme = $('#theme').value;
   const market = currentMarket();
-  $('#status').textContent = 'Loading feed…';
+  $('#status').textContent = '';
+  // A background auto-refresh keeps the table on screen until fresh data lands;
+  // only a user-driven load swaps in the skeleton.
+  if (!quiet || !document.querySelector('#content .tbl tbody')) skeletonFeed();
   const data = await getJSON(`/api/recommendations/feed?days=${days}&market=${market}${theme ? '&theme=' + encodeURIComponent(theme) : ''}`);
+  if (view !== 'feed') return;   // the user navigated away while this was in flight
   renderHighlights(data.highlights);
+  renderKpis(data.stocks, data.highlights);
   _updateFeedTimestamp();
   _scheduleAutoRefresh();
   _feedStocks = data.stocks;
   _feedSort = { col: null, dir: 1 }; // reset sort on fresh load
-  $('#status').textContent = `${data.stocks.length} stocks · click a row to see which analysts and why`;
   if (!data.stocks.length) {
-    $('#content').innerHTML = `<div class="empty">No recommendations yet.<br/>Click "Refresh now" to fetch today's analyst calls.</div>`;
+    $('#content').innerHTML = `<section class="card">${stateHtml({
+      title: 'No recommendations yet',
+      text: "Fetch today's analyst calls to populate the feed.",
+      action: { id: 'refresh', label: 'Fetch now' } })}</section>`;
     return;
   }
   _renderFeedRows();
@@ -500,7 +573,7 @@ async function showStockOverview(sym) {
   // Generic finance-site page for ANY ticker — shown when a global-search hit
   // isn't in the tracked analyst universe, instead of a silent dead end.
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  $('#highlights').innerHTML = '';
+  clearOverview();
   $('#status').textContent = '';
   $('#content').innerHTML = waitingHtml(`Loading ${sym}…`, 'stock');
   _chatSymbol = sym;
@@ -553,8 +626,9 @@ async function toggleExpand(tr) {
   const sym = tr.dataset.sym;
   const exp = $(`tr.expand[data-for="${sym}"]`);
   const open = exp.style.display !== 'none';
-  if (open) { exp.style.display = 'none'; tr.classList.remove('open'); return; }
+  if (open) { exp.style.display = 'none'; tr.classList.remove('open'); tr.setAttribute('aria-expanded', 'false'); return; }
   tr.classList.add('open');
+  tr.setAttribute('aria-expanded', 'true');
   exp.style.display = '';
   _chatSymbol = sym;   // focus the chat bot on the stock just opened
   const body = exp.querySelector('.expand-inner');
@@ -650,7 +724,7 @@ function renderDetail(d) {
 }
 
 async function loadLeaderboard() {
-  $('#highlights').innerHTML = '';
+  clearOverview();
   $('#status').textContent = 'Loading leaderboard…';
   const data = await getJSON(`/api/recommendations/leaderboard?metric=consensus&limit=50&market=${currentMarket()}`);
   $('#status').textContent = `Ranked by ${data.metric}`;
@@ -690,7 +764,7 @@ let _wlSearchTimer = null;
 let _wlSelectedSym = null; // symbol chosen from dropdown
 
 async function loadWatchlist() {
-  $('#highlights').innerHTML = '';
+  clearOverview();
   if (!_currentUser) {
     $('#status').textContent = '';
     $('#content').innerHTML = `
@@ -834,7 +908,7 @@ async function removeFromWatchlist(symbol, group) {
 }
 
 async function loadDigest() {
-  $('#highlights').innerHTML = '';
+  clearOverview();
   const market = currentMarket();
   $('#status').textContent = 'Loading macro digest…';
   let data;
@@ -872,7 +946,7 @@ async function loadDigest() {
 }
 
 async function loadAdmin() {
-  $('#highlights').innerHTML = '';
+  clearOverview();
   if (!_currentUser || _currentUser.role !== 'admin') {
     $('#status').textContent = '';
     $('#content').innerHTML = `<div class="empty">Admin access required.</div>`;
@@ -962,7 +1036,13 @@ const VIEWS = { feed: loadFeed, leaderboard: loadLeaderboard, watchlist: loadWat
 
 function render() {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === view));
-  (VIEWS[view] || loadFeed)().catch(e => $('#status').textContent = 'Error: ' + e.message);
+  (VIEWS[view] || loadFeed)().catch(e => {
+    $('#status').textContent = '';
+    clearOverview();   // drop any skeleton tiles left behind by the failed load
+    $('#content').innerHTML = `<section class="card">${stateHtml({
+      error: true, icon: 'triangle-alert', title: "Couldn't load this view",
+      text: e.message || 'Something went wrong.', action: { id: 'retry', label: 'Try again' } })}</section>`;
+  });
 }
 
 document.querySelectorAll('.tab').forEach(t =>
@@ -986,6 +1066,81 @@ $('#refresh').addEventListener('click', async () => {
   } catch (e) { $('#status').textContent = 'Refresh failed: ' + e.message; }
 });
 
+// ── Header controls: segmented filters, theme toggle, account menu ─────────────
+// The segmented buttons are a view over the hidden <select>s. The select stays
+// the single source of truth (every loader reads it), so changing a segment just
+// sets the select and fires its own 'change' — no second path to keep in sync.
+document.querySelectorAll('.seg[data-for]').forEach((seg) => {
+  const sel = document.getElementById(seg.dataset.for);
+  const sync = () => seg.querySelectorAll('button').forEach((b) =>
+    b.setAttribute('aria-pressed', b.dataset.v === sel.value ? 'true' : 'false'));
+  seg.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-v]');
+    if (!b || b.dataset.v === sel.value) return;
+    sel.value = b.dataset.v;
+    sel.dispatchEvent(new Event('change'));
+    sync();
+  });
+  sync();
+});
+
+// Theme: nothing saved → follow the OS (CSS handles it, no attribute). A click
+// saves an explicit light/dark choice, applied by the inline script in <head> on
+// the next load. Storage can throw, so it is guarded; the toggle still works for
+// the session without it.
+(function initThemeToggle() {
+  const btn = document.getElementById('themeToggle');
+  if (!btn) return;
+  const root = document.documentElement;
+  const mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  const effective = () => root.getAttribute('data-theme') || (mq && mq.matches ? 'dark' : 'light');
+  const reflect = () => {
+    const dark = effective() === 'dark';
+    btn.setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme');
+    btn.title = dark ? 'Switch to light theme' : 'Switch to dark theme';
+    // The <meta theme-color> pair is media-query driven; an explicit choice
+    // overrides it so the mobile browser chrome matches the page.
+    document.querySelectorAll('meta[name="theme-color"]').forEach((m) => m.remove());
+    const m = document.createElement('meta');
+    m.name = 'theme-color';
+    m.content = dark ? '#0b0f1a' : '#f6f7fb';
+    document.head.appendChild(m);
+  };
+  btn.addEventListener('click', () => {
+    const next = effective() === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('theme', next); } catch (e) {}
+    reflect();
+  });
+  if (mq && mq.addEventListener) mq.addEventListener('change', reflect);
+  reflect();
+})();
+
+// Account menu: a disclosure popover. Closes on outside click, Escape, or when
+// any item inside it is used.
+(function initAccountMenu() {
+  const btn = document.getElementById('avatarBtn');
+  const menu = document.getElementById('acctMenu');
+  if (!btn || !menu) return;
+  const set = (open) => {
+    menu.hidden = !open;
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+  btn.addEventListener('click', (e) => { e.stopPropagation(); set(menu.hidden); });
+  document.addEventListener('click', (e) => {
+    if (menu.hidden) return;
+    // The Facts switch is a setting: leave the menu open so the change is visible.
+    if (e.target.closest('#factsToggle')) return;
+    if (!menu.contains(e.target) || e.target.closest('.menu-item')) set(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !menu.hidden) { set(false); btn.focus(); }
+  });
+  // Refresh lives in the filter row on desktop and in this menu on mobile.
+  const rm = document.getElementById('refreshMenu');
+  if (rm) rm.addEventListener('click', () => $('#refresh').click());
+})();
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 let _authMode = 'login';
 let _currentUser = null;
@@ -999,23 +1154,29 @@ function hideAuth() {
   $('#authError').textContent = '';
 }
 
-// Reflect login state in the header: "Sign in" button vs. the user menu.
+// Reflect login state in the header: the account menu shows "Sign in" for
+// guests, or the member's name, WhatsApp and Log out once signed in.
 function updateAuthUI() {
-  const isAdmin = _currentUser && _currentUser.role === 'admin';
+  const isAdmin = !!(_currentUser && _currentUser.role === 'admin');
   // Operations (SRE dashboard + Admin) is admin-only, not for every visitor.
-  const opsNav = document.getElementById('opsNav');
-  if (opsNav) opsNav.hidden = !isAdmin;
-  $('#adminTab').hidden = !isAdmin;
-  const sreTab = document.getElementById('sreTab');
-  if (sreTab) sreTab.hidden = !isAdmin;
+  document.querySelectorAll('[data-admin-only]').forEach((n) => { n.hidden = !isAdmin; });
   if (!isAdmin && (view === 'admin' || view === 'sre')) { view = 'feed'; render(); }
-  if (_currentUser) {
-    $('#userName').textContent = _currentUser.display_name || _currentUser.email;
-    $('#userMenu').hidden = false;
-    $('#signIn').hidden = true;
+  const signedIn = !!_currentUser;
+  $('#userMenu').hidden = !signedIn;
+  $('#waConnect').hidden = !signedIn;
+  $('#logout').hidden = !signedIn;
+  $('#logoutSep').hidden = !signedIn;
+  $('#signIn').hidden = signedIn;
+  const av = $('#avatarInit');
+  if (signedIn) {
+    const label = _currentUser.display_name || _currentUser.email || '';
+    $('#userName').textContent = label;
+    $('#userEmail').textContent = _currentUser.display_name ? (_currentUser.email || '') : '';
+    $('#userEmail').hidden = !_currentUser.display_name;
+    const initials = label.split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+    av.textContent = initials || '?';
   } else {
-    $('#userMenu').hidden = true;
-    $('#signIn').hidden = false;
+    av.innerHTML = icon('circle-user');
   }
 }
 
@@ -1045,7 +1206,7 @@ $('#authForgot').addEventListener('click', async () => {
   try {
     const r = await postJSON('/api/auth/forgot-password', { email });
     $('#authError').textContent = '';
-    $('#authError').style.color = 'var(--buy)';
+    $('#authError').style.color = 'var(--gain)';
     $('#authError').textContent = r.detail || 'If that email is registered, a reset link was sent.';
   } catch (err) {
     $('#authError').textContent = err.message || 'Could not send reset link.';
@@ -1104,7 +1265,7 @@ $('#logout').addEventListener('click', async () => {
         steps.push('Send this 6-digit code to our WhatsApp number:');
       }
       body.innerHTML = `
-        ${d.already_linked ? '<p class="wa-linked">✅ This account is already connected. Generating a new code re-links a different phone.</p>' : ''}
+        ${d.already_linked ? `<p class="wa-linked">${icon('check', 'ic sm')} This account is already connected. Generating a new code re-links a different phone.</p>` : ''}
         <ol class="wa-steps">${steps.map(s => `<li>${s}</li>`).join('')}</ol>
         <div class="wa-code">${esc(d.code)}</div>
         <p class="wa-expiry">Expires in ${d.expires_minutes} minutes.</p>
@@ -1125,7 +1286,7 @@ function onLoggedIn(user) {
 
 // ── Ask-AI chat ─────────────────────────────────────────────────────────────
 function chatScopeLabel() {
-  const mkt = currentMarket() === 'in' ? '🇮🇳' : '🇺🇸';
+  const mkt = currentMarket() === 'in' ? 'IN' : 'US';
   return _chatSymbol ? `${mkt} · ${_chatSymbol}` : `${mkt} · ${view}`;
 }
 function addChatMsg(text, who) {
@@ -1140,7 +1301,7 @@ function toggleChat(open) {
   const panel = $('#chatPanel');
   const show = open ?? panel.hidden;
   panel.hidden = !show;
-  $('#chatFab').hidden = show;
+  $('#chatFab').setAttribute('aria-expanded', show ? 'true' : 'false');
   if (show) {
     panel.classList.remove('chat-min');   // always open expanded
     $('#chatScope').textContent = chatScopeLabel();
@@ -1149,7 +1310,7 @@ function toggleChat(open) {
   }
 }
 
-$('#chatFab').addEventListener('click', () => toggleChat(true));
+$('#chatFab').addEventListener('click', () => toggleChat());
 $('#chatClose').addEventListener('click', () => toggleChat(false));
 
 // Minimize → collapse to just the header bar; click the header (or —) to restore.
@@ -1168,8 +1329,9 @@ $('#chatMax').addEventListener('click', (e) => {
   const panel = $('#chatPanel');
   panel.classList.remove('chat-min');
   const max = panel.classList.toggle('chat-max');
-  e.currentTarget.textContent = max ? '⤡' : '⤢';
+  e.currentTarget.innerHTML = icon(max ? 'minimize-2' : 'maximize-2', 'ic sm');
   e.currentTarget.title = max ? 'Restore' : 'Maximize';
+  e.currentTarget.setAttribute('aria-label', max ? 'Restore' : 'Maximize');
 });
 $('#chatForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -1285,7 +1447,6 @@ $('#chatForm').addEventListener('submit', async (e) => {
 async function boot() {
   // Public-first: render the dashboard for everyone, then check session in the
   // background to flip the header into logged-in mode if a cookie is present.
-  loadStats();
   loadThemes();
   render();
   try {
@@ -1664,7 +1825,7 @@ async function _runCompare() {
 }
 
 async function loadFunds() {
-  $('#highlights').innerHTML = '';
+  clearOverview();
   $('#status').textContent = 'Fund Tracker — add ETFs & mutual funds to compare and track.';
 
   const addBar = `
@@ -1882,7 +2043,7 @@ function _sreHeatCell(v, max) {
   // single-hue sequential ramp (blue), light→dark with magnitude
   const t = max > 0 ? Math.min(1, v / max) : 0;
   const alpha = 0.06 + t * 0.85;
-  return `<span class="cell" style="background:rgba(57,135,229,${alpha.toFixed(2)})"
+  return `<span class="cell" style="background:color-mix(in srgb, var(--series-1) ${Math.round(alpha * 100)}%, transparent)"
     title="${v.toFixed(2)}% errors"></span>`;
 }
 
@@ -1894,7 +2055,7 @@ function _fmtUptime(seconds) {
 }
 
 async function loadSRE() {
-  $('#highlights').innerHTML = '';
+  clearOverview();
   // Defense in depth: the nav item is hidden for non-admins, but guard the
   // renderer too in case the view is reached some other way.
   if (!_currentUser || _currentUser.role !== 'admin') {

@@ -37,12 +37,18 @@ The scales are now closed sets, defined as tokens at the top of
   button) — leave those alone.
 - **Radius** — `--radius-xs` 4 / `--radius-sm` 8 / `--radius` 12 /
   `--radius-pill`.
-- **Colour** — always a `:root` token, never a raw hex/rgba. New chart or
-  status colours must be contrast-checked against the dark surface first.
-- **Panels** — a block of content sits in the glass card the rest of the page
-  uses (`background: var(--bg-glass)`, `1px solid var(--border)`,
-  `border-radius: var(--radius)`, `backdrop-filter: blur(10px)`). A panel
-  floating bare beside carded siblings reads as unfinished.
+- **Colour** — always a `:root` token, never a raw hex/rgba. Every token has a light
+  value on `:root` and a dark value in **both** dark blocks (`prefers-color-scheme` and
+  `[data-theme="dark"]`, kept identical). New colours must pass
+  `tests/test_design_tokens.py` (WCAG AA in both themes); it also fails on a raw colour
+  outside the token blocks and on light/dark drift.
+- **Panels** — a block of content sits in the card the rest of the page uses
+  (`background: var(--surface)`, `1px solid var(--border)`, `border-radius: var(--radius)`,
+  `box-shadow: var(--shadow)`). A panel floating bare beside carded siblings reads as
+  unfinished. Legacy `--bg-glass` still works as an alias.
+- **Icons** — from the inline SVG sprite in `web/index.html` (`icon('name')` in JS). No
+  emoji or text glyphs as icons in new UI. Add a new symbol to the sprite (Lucide, ISC).
+- **Gain / loss** — never colour alone; pair it with an arrow, sign or word.
 
 Adding a step to a scale is a design decision — make it in the token block with
 a reason, not inline. Audit any time (should print only the values above):

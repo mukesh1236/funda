@@ -25,3 +25,4 @@ when the people (or sessions) who made it are gone.
 | [0008](0008-stay-on-railway.md) | Stay on Railway rather than move to AWS or Azure | Accepted |
 | [0009](0009-closed-ui-scales.md) | The UI uses closed type, space and radius scales | Accepted |
 | [0010](0010-bounded-caches.md) | Every in-process cache must be bounded | Accepted |
+| [0011](0011-visual-identity-and-tokens.md) | Visual identity "Clarity": light and dark themes on semantic tokens | Accepted |

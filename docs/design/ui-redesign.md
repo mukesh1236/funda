@@ -3,69 +3,63 @@
 *Implemented in `web/` (index.html, styles.css, app.js additions). This doc is
 the design record: layout, palette, component hierarchy, and the rationale.*
 
-> **Current rules.** This is the original design record. The type, space and radius
-> scales were later made closed sets; those rules, and the audit command, are in
-> [`CLAUDE.md`](../../CLAUDE.md) and [ADR 0009](../adr/0009-closed-ui-scales.md). Where
-> this document gives a pixel value that is not on those scales, the scales win.
+> **Current state.** The shell and Overview were redesigned in the "Clarity" identity
+> ([ADR 0011](../adr/0011-visual-identity-and-tokens.md)): top navigation, light and dark
+> themes, self-hosted Inter, an SVG icon sprite. The scales are closed
+> ([ADR 0009](../adr/0009-closed-ui-scales.md)); the rules and audit command are in
+> [`CLAUDE.md`](../../CLAUDE.md). Sections below that describe the old sidebar, the navy
+> glass palette or Google Fonts are history; this section and the next two are current.
 
 ## Layout & structure
 
 ```
-app-shell (flex)
-├── sidenav (218px, sticky, glass)
-│   ├── brand (logo + AlphaFunds)
-│   ├── nav-group "Markets"
-│   │   ├── Overview          (view: feed)
-│   │   ├── Coverage & Leaders(view: leaderboard)
-│   │   ├── Watchlist         (view: watchlist)
-│   │   ├── Funds             (view: funds)
-│   │   └── Market Digest     (view: digest)
-│   ├── nav-group "Operations"
-│   │   ├── SRE Dashboard     (view: sre)        ← new
-│   │   └── 🔒 Admin          (gold accent, admin-only)
-│   └── sidenav-foot (live pulse dot + last-updated timestamp)
-└── main-col
+app-shell
+└── main-col (max 1320px, centred)
     ├── topbar (sticky)
-    │   ├── global search (ticker/company, /api/search, → opens stock detail)
-    │   └── actions: market · segment · window · Refresh(↻ spins) · auth
-    ├── stats        (4 KPI glass tiles: tracked / sources / auto-refresh / updated)
-    ├── highlights   (analyst calls · movers · coverage · strongest buy/sell)
+    │   ├── row 1: brand · primary nav (.tab[data-view]) · Ask AI · theme toggle · account menu
+    │   │          (ops nav: SRE + Admin, role=admin only)
+    │   └── row 2: search · market seg · window seg · segment select · refresh · "Updated"
+    ├── stats        (4 market KPIs derived from the feed payload)
+    ├── highlights   (12-col grid: analyst calls · movers · coverage · strongest buy/sell)
     └── main → #status + #content (per-view render)
 
-floating: Ask-AI assistant (gradient FAB → glass panel with suggestion chips)
-overlays: auth, welcome (unchanged logic, retheme only)
+mobile (<=900px): nav moves to a bottom tab bar (same .tab[data-view] buttons); the account
+menu gains Refresh and the admin views; the chat opens as a sheet over the tab bar.
+overlays: auth, welcome, WhatsApp, chat panel (token-themed)
 ```
 
-All pre-existing element IDs and the `.tab[data-view]` mechanism were preserved,
-so 1,100+ lines of working view logic in `app.js` needed no rewrite — the
-redesign is a re-skin plus additive features.
+The market and window controls are segmented buttons over hidden `<select id="market">`
+and `<select id="days">`; the selects stay the source of truth, so every loader is
+unchanged. All `.tab[data-view]` and element IDs the logic relied on were preserved.
 
-## Color palette (validated)
+**Rules that must not change**
 
-Chart/status colors were run through the dataviz six-checks validator against
-the actual card surface (`#141d2f`): lightness band, chroma floor, CVD
-separation (worst adjacent ΔE 35.9 vs ≥12 target), and ≥3:1 contrast — all pass.
+- KPIs are derived only from the feed payload; never add a metric the feed cannot support.
+- Gain/loss always carries an arrow or sign, not colour alone.
+- The theme is decided in CSS from `prefers-color-scheme` and `[data-theme]`; JS only
+  records the user's explicit choice. A stored choice is applied by the inline script in
+  `<head>` before the stylesheet loads.
+- `#themeToggle`, not `#theme` (that id is the segment select).
+- A background auto-refresh keeps the table on screen; only a user-driven load shows the
+  skeleton.
 
-| Role | Hex | Use |
-|---|---|---|
-| Page plane | `#0b1220` | deep navy background + blue/green radial gradients |
-| Card glass | `rgba(255,255,255,.04)` + `backdrop-filter: blur(10px)` | all panels |
-| Accent | `#3987e5` | interactive elements, active nav, links, series-1 |
-| Success | `#0ca30c` / `#2ecc71` | buy counts, SLO ok, live dot |
-| Warning | `#fab219` | medium confidence, SEV2, demo-data note |
-| Error | `#d03b3b` / `#e66767` | sell counts, SEV1, misses |
-| Admin | `#d4a017` gold | admin nav + admin panels (visually distinct + 🔒) |
-| Ink | `#e8edf6` / `#aab6c8` / `#7c899d` | primary / secondary / muted |
+## Colour
 
-Typography: **Inter** (Google Fonts, system-ui fallback), tabular numerals on
-all numeric columns.
+Tokens are in `web/styles.css`: semantic names (`--bg`, `--surface`, `--surface-2`,
+`--text`, `--muted`, `--accent`, `--accent-fill`, `--gain`, `--loss`, `--warn` and their
+`-soft` fills), defined for light on `:root` and for dark in two identical blocks. Legacy
+names (`--bg-glass`, `--good-hi`, ...) alias the new ones. `tests/test_design_tokens.py`
+asserts contrast for both themes, so the palette values are not repeated here.
+
+Typography: **Inter**, self-hosted from `web/fonts/` (latin + latin-ext for the rupee
+sign), tabular numerals wherever digits line up in columns.
 
 ## Data visualization
 
-- **Consensus strength meter** under each stock's B/H/S counts — proportional
-  buy-vs-sell fill with a 2px surface gap (dataviz spacer rule).
-- **Ticker monograms** — deterministic hue per symbol (8 fixed hues, hashed),
-  no external logo dependency.
+- **Consensus bar** per stock: proportional buy / hold / sell segments with the score and
+  B/H/S counts beneath (the counts keep it readable without colour).
+- **Ticker monograms** — a neutral tile with the first three letters; no per-ticker hue
+  (it would need a second palette for dark mode) and no external logo dependency.
 - **Watchlist sparklines** (existing) recolored to series-1 via CSS var.
 - **SRE view**: single-series SVG line charts (latency, error rate — one axis
   each, never dual-axis), single-hue sequential heatmap for errors-by-hour,
@@ -85,13 +79,13 @@ it live is a fetch-swap.
 
 ## Interaction & UX
 
-- Hover: cards lift 2px + border brighten; rows tint accent; nav slides 2px.
-- Refresh button spins (`.working`) during the 45s background refresh window.
+- Hover: rows tint; nav items tint. Rows open from the keyboard (Enter/Space).
+- Refresh icon spins (`.working`) during the 45s background refresh window.
 - Global search debounced 250ms, Enter selects first hit, Esc dismisses.
-- Ask-AI: gradient pill FAB, rising panel animation, contextual suggestion
+- Ask-AI: header button, rising panel animation, contextual suggestion
   chips that submit on click; scope label shows market · view/symbol.
 - Admin: gold accent + lock icon; only rendered for role=admin (unchanged RBAC).
-- Responsive: <900px collapses the sidenav into a horizontal scroll bar.
+- Responsive: <=900px swaps the top nav for a bottom tab bar (see Layout).
 
 ## Library recommendations (when charts outgrow hand-rolled SVG)
 
