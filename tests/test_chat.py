@@ -226,16 +226,18 @@ def test_fundamentals_question_injects_overview_for_tracked_stock(tmp_path):
         fundamentals=Fundamentals(sector="Communication Services",
                                   market_cap=2_100_000_000_000, pe_ratio=28.5),
     )
+    store.add_recommendation(AnalystRecommendation(
+        symbol="META", source="yahoo", action="buy", count=20,
+        entry_date=date.today().isoformat()))
     with patch("app.chat.generate_narrative", return_value="reasoned answer") as gen, \
          patch("app.chat._detect_symbol", return_value="META"), \
-         patch("app.chat._fmt_symbol", return_value="FOCUS STOCK META: analyst data"), \
          patch("app.service.build_stock_overview", return_value=ov):
         answer, error, source = answer_question(
             store, settings, "what are the fundamentals of Meta")
     prompt = gen.call_args[0][0]
     assert "COMPANY PROFILE + NEWS for META" in prompt
-    assert "P/E: 28.5" in prompt
-    assert "analyst data" in prompt   # still keeps the analyst context too
+    assert "P/E 28.5" in prompt
+    assert "FOCUS STOCK META" in prompt   # still keeps the analyst context too
 
 
 def test_non_fundamentals_question_skips_overview_fetch(tmp_path):

@@ -30,6 +30,28 @@ Values are in [`schemas/error-codes.md`](../schemas/error-codes.md).
 5. **Degrade.** LLM off or unreachable: `_rule_answer` for structured questions,
    then `_overview`. A lesser answer, never a 500.
 
+## Which stock a question is about
+
+`_resolve_symbol` decides once, in this order: the stock the user has open in the
+dashboard; a ticker or company-name word found in the feed; a known alias for names
+that are not in the legal name (`_NAME_ALIASES`: Facebook and Instagram are META,
+Google, Alphabet and YouTube are GOOGL); then a live Yahoo search for anything else.
+**Whether the stock is tracked is decided by the database**, not by which step found
+it, because a search can land on a stock we track.
+
+- Tracked: analyst context (`_fmt_symbol`), plus the market-data overview when the
+  question asks for fundamentals or news.
+- Not tracked: the market-data overview (price, fundamentals, returns, news).
+- Fundamentals are passed in full (`_fmt_fundamentals`: P/E, forward P/E, PEG, EPS,
+  revenue growth, margin, ROE, debt/equity, dividend, beta, price/book, 52-week
+  range). When the source returns none, the prompt says "unavailable right now"
+  rather than leaving the model to call the data absent.
+- The rule fallback answers a fundamentals question with the same block, so it works
+  without an LLM too.
+- Named analyst calls go through `analytics.distinct_named_calls`: Morningstar
+  re-records the same star rating daily, so only its newest is kept, and exact
+  repeats from other firms are dropped. The same list feeds the detail panel.
+
 ## Rules that must not change
 
 - **The two guards run before the model.** Both must stay deterministic and

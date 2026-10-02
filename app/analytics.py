@@ -72,6 +72,36 @@ def _latest_per_source(recs: List[AnalystRecommendation]) -> List[AnalystRecomme
     return [r for r in recs if (r.entry_date or "") == latest_date.get(r.source, "")]
 
 
+# Sources that publish a standing rating rather than discrete analyst actions.
+# They are re-recorded every day the rating holds, so only the newest matters.
+SNAPSHOT_SOURCES = frozenset({"morningstar"})
+
+
+def distinct_named_calls(recs: List[AnalystRecommendation]) -> List[AnalystRecommendation]:
+    """Named-firm calls, newest first, with repeated snapshots removed.
+
+    Morningstar re-records the same star rating every day, so a stock's call list
+    filled up with identical "Morningstar: 4-star rating" rows and crowded out the
+    firms that actually acted. For snapshot sources keep only the newest per firm;
+    for everything else drop exact repeats (same firm, action, target and note),
+    which keeps genuinely different calls by the same firm.
+
+    Display only: consensus counts already use each source's latest snapshot.
+    """
+    out: List[AnalystRecommendation] = []
+    seen: set = set()
+    for r in sorted((r for r in recs if r.firm), key=lambda r: r.entry_date or "", reverse=True):
+        if r.source in SNAPSHOT_SOURCES:
+            key = ("snapshot", r.source, r.firm.lower())
+        else:
+            key = (r.source, r.firm.lower(), r.action, r.target_price, (r.note or "").strip().lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
 def compute_consensus(
     recs: List[AnalystRecommendation],
     source_hit_rates: Optional[Dict[str, float]] = None,

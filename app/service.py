@@ -416,8 +416,11 @@ def build_detail_core(
     consensus = _enrich(store, consensus)
 
     # Named analyst calls first (these carry the firm + rationale the user wants
-    # on expand), then newest first.
-    recs.sort(key=lambda r: (r.firm is not None, r.entry_date or ""), reverse=True)
+    # on expand), newest first and without repeated daily snapshots; then the
+    # unnamed aggregate rows.
+    from app.analytics import distinct_named_calls
+    recs = distinct_named_calls(recs) + sorted(
+        (r for r in recs if not r.firm), key=lambda r: r.entry_date or "", reverse=True)
     rec_out = [
         RecommendationOut(
             rec_id=r.rec_id, symbol=r.symbol, source=r.source, action=r.action,
