@@ -40,6 +40,7 @@ from app.models import (
     RegisterRequest,
     ResetPasswordRequest,
     SetRoleRequest,
+    ScoreboardResult,
     StockDetailExtras,
     StockDetailResult,
     ThemesResult,
@@ -47,6 +48,7 @@ from app.models import (
     WatchlistAddRequest,
     WatchlistGroups,
     WatchlistResult,
+    WhatIfResult,
     normalize_symbol,
 )
 from app.service import (
@@ -455,6 +457,35 @@ def stock_overview(symbol: str):
         raise HTTPException(404, detail=f"'{sym}' did not resolve to a known ticker.")
     overview.tracked = sym.upper() in {s.upper() for s in settings.universe("us") + settings.universe("in")}
     return overview
+
+
+@app.get("/api/whatif", response_model=WhatIfResult)
+def what_if_endpoint(
+    symbol: str,
+    start: date = Query(..., description="Buy on the first trading day on or after this date"),
+    amount: float = Query(1000.0, gt=0, le=10_000_000),
+):
+    """What `amount` put into `symbol` on `start` would be worth now, next to the
+    same amount in the market index. A simulation on past prices; nothing is stored."""
+    from app.backtest import WhatIfError, build_what_if
+    try:
+        sym = normalize_symbol(symbol)
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e))
+    try:
+        return build_what_if(sym, amount, start)
+    except WhatIfError as e:
+        message = str(e)
+        raise HTTPException(404 if message.startswith("There is no price history") else 422, detail=message)
+
+
+@app.get("/api/scoreboard", response_model=ScoreboardResult)
+def scoreboard_endpoint(market: str = Query("us", pattern="^(us|in)$")):
+    """How the strongest analyst consensus has performed against the market index,
+    week by week since recording began. Built in the background on first use
+    (status "computing"; poll), then cached for six hours."""
+    from app.backtest import start_scoreboard_build
+    return start_scoreboard_build(store, market)
 
 
 @app.get("/api/recommendations/{symbol}/core", response_model=StockDetailResult)
