@@ -76,6 +76,15 @@ cite a document rather than assert something from nowhere.
    `(symbol, doc_key, schema_ver)`. A fact sheet regenerates only when the fund
    files something new, or when `SUMMARY_SCHEMA_VERSION` is bumped.
 
+## Required configuration: `EDGAR_USER_AGENT`
+
+SEC EDGAR returns **HTTP 403** to any client that does not identify itself with contact
+information. Without `EDGAR_USER_AGENT` set (for example `AlphaFunds/1.0 (name@domain)`),
+every fetch is refused, so **fact sheets and full N-PORT holdings both fail** and funds fall
+back to the yfinance top-10 sample. The app now logs a warning at startup when it is unset.
+The built-in default does not count as identifying. Seen in production on 2026-10-02: fact
+sheets showed as unavailable and the logs held repeated 403s from `sec.gov`.
+
 ## Cost and rate controls
 
 | Control | Value | Why |

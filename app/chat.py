@@ -10,7 +10,7 @@ import logging
 import re
 from typing import List, Optional, Tuple
 
-from app.analytics import compute_consensus
+from app.analytics import compute_consensus, distinct_named_calls
 from app.config import Settings
 from app.llm import generate_narrative
 from app.service import build_feed, build_leaderboard
@@ -180,10 +180,18 @@ _QUESTION_STOPWORDS = frozenset({
     "revenue", "earnings", "profit", "margin", "dividend", "news", "latest",
     "recent", "update", "updates", "headline", "headlines", "performance",
     "return", "returns", "sector", "pe", "ratio",
+    # company-name boilerplate and pronouns: "caterpillar company fundamentals"
+    # must search "caterpillar", and "what are its fundamentals" must not search "its".
+    "company", "companies", "inc", "corp", "corporation", "ltd", "limited",
+    "group", "holdings", "it", "its", "this", "that", "they", "their", "them",
 })
 
+# Words that refer back to the stock the user has open ("what are ITS fundamentals").
+_OPEN_STOCK_REFERENCES = frozenset({"it", "its", "this", "that", "they", "their", "them"})
 
-def _detect_untracked_symbol(question: str, market: str) -> Optional[str]:
+
+def _detect_untracked_symbol(question: str, market: str, name_search: bool = True,
+                             require_name_match: bool = False) -> Optional[str]:
     """When no tracked ticker/company matched, try resolving a stock the app
     doesn't track (e.g. "AAPL market cap", "how's Coca-Cola doing?") so the
     chat can answer with generic overview data instead of "not in my dataset"."""
@@ -200,13 +208,64 @@ def _detect_untracked_symbol(question: str, market: str) -> Optional[str]:
 
     # Otherwise, resolve a company name (e.g. "Coca-Cola") via the same
     # fuzzy search the site's search bar uses.
+    if not name_search:
+        return None
     words = re.findall(r"[a-zA-Z]+", q)
     query = " ".join(w for w in words if w not in _QUESTION_STOPWORDS)
-    if not query:
+    if len(query) < 3:
         return None
     from app.sources.search import search_tickers
     hits = search_tickers(query, market=market, limit=1)
-    return hits[0]["symbol"] if hits else None
+    if not hits:
+        return None
+    if require_name_match:
+        # A stock is already open, so a fuzzy hit for leftover words ("good",
+        # "going up") must not override it. Accept only a hit whose name shares a
+        # whole word with what was asked.
+        asked = set(query.split())
+        named = set(re.findall(r"[a-z]+", (hits[0].get("name") or "").lower()))
+        if not asked & named:
+            return None
+    return hits[0]["symbol"]
+
+
+# Names people use that are not in the company's legal name: renamed companies
+# and brands better known than their parent. Matched as whole words.
+_NAME_ALIASES = {
+    "facebook": "META", "instagram": "META",
+    "google": "GOOGL", "alphabet": "GOOGL", "youtube": "GOOGL",
+}
+
+
+def _alias_symbol(question: str) -> Optional[str]:
+    words = set(re.findall(r"[a-z]+", question.lower()))
+    for name, sym in _NAME_ALIASES.items():
+        if name in words:
+            return sym
+    return None
+
+
+def _resolve_symbol(store: RecommendationStore, question: str, market: str,
+                    symbol: Optional[str], stocks: list) -> Tuple[Optional[str], bool]:
+    """Which stock the question is about, and whether we track analyst ratings
+    for it. What the question NAMES wins: a ticker or company name in the feed, a
+    known alias ("Facebook" is META), then a live search for anything else. The
+    stock the user has open is the fallback, used when the question names none or
+    refers back to it ("its fundamentals"). A search can land on a stock we DO
+    track, so tracking is decided by the database, not by which step found it."""
+    found = _detect_symbol(question, stocks) or _alias_symbol(question)
+    if not found:
+        # The open row is only a default. The page sends it with EVERY question,
+        # so letting it win made "caterpillar fundamentals" an answer about
+        # whichever row was opened last, and no Caterpillar lookup ever ran.
+        refers_back = bool(symbol) and bool(
+            _OPEN_STOCK_REFERENCES & set(re.findall(r"[a-z]+", question.lower())))
+        found = _detect_untracked_symbol(
+            question, market, name_search=not refers_back, require_name_match=bool(symbol))
+    found = found or symbol
+    if not found:
+        return None, False
+    return found, bool(store.list_for_symbol(found))
 
 
 # Fundamentals (P/E, revenue, market cap, margins…) and company news live in the
@@ -233,6 +292,31 @@ def _needs_news(question: str) -> bool:
     return any(s in question.lower() for s in _NEWS_SIGNALS)
 
 
+def _fmt_fundamentals(f) -> str:
+    """Every fundamental we hold, not a hand-picked three: a 'fundamentals'
+    question deserves EPS, margins, growth and leverage too."""
+    def num(v, fmt="{:g}", suffix=""):
+        return None if v is None else fmt.format(v) + suffix
+    items = [
+        ("Sector", (f"{f.sector}" + (f" / {f.industry}" if f.industry else "")) if f.sector else None),
+        ("Market cap", num(f.market_cap, "${:,.0f}")),
+        ("P/E", num(f.pe_ratio)), ("Forward P/E", num(f.forward_pe)), ("PEG", num(f.peg_ratio)),
+        ("EPS", num(f.eps, "${:g}")),
+        ("Revenue growth", num(f.revenue_growth, suffix="%")),
+        ("Profit margin", num(f.profit_margin, suffix="%")),
+        ("ROE", num(f.roe, suffix="%")), ("Debt/Equity", num(f.debt_to_equity)),
+        ("Dividend yield", num(f.dividend_yield, suffix="%")), ("Beta", num(f.beta)),
+        ("Price/Book", num(f.price_to_book)),
+        ("52-week range", f"${f.week52_low:g}-${f.week52_high:g}"
+         if f.week52_low is not None and f.week52_high is not None else None),
+    ]
+    text = "Fundamentals: " + "; ".join(f"{k} {v}" for k, v in items if v)
+    notes = getattr(f, "notes", None) or []
+    if notes:
+        text += ". Notes: " + " ".join(notes)
+    return text
+
+
 def _fmt_overview(ov, supplement: bool = False) -> str:
     """Generic profile context (price, sector, market cap, P/E, dividend, 12m
     return, recent news) — the standalone stock-overview data. `supplement=True`
@@ -247,16 +331,12 @@ def _fmt_overview(ov, supplement: bool = False) -> str:
         ]
     if ov.price is not None:
         parts.append(f"Current price: ${ov.price}")
-    f = ov.fundamentals
-    if f:
-        if f.sector:
-            parts.append(f"Sector: {f.sector}" + (f" / {f.industry}" if f.industry else ""))
-        if f.market_cap:
-            parts.append(f"Market cap: ${f.market_cap:,.0f}")
-        if f.pe_ratio:
-            parts.append(f"P/E: {f.pe_ratio:g}")
-        if f.dividend_yield:
-            parts.append(f"Dividend yield: {f.dividend_yield:g}%")
+    if ov.fundamentals:
+        parts.append(_fmt_fundamentals(ov.fundamentals))
+    else:
+        # Say so explicitly: otherwise the model reports the data as "not in the
+        # dataset", which reads as if the app has no such data at all.
+        parts.append("Fundamentals: unavailable right now (the data source did not respond).")
     r = ov.returns
     if r and r.twelve_month is not None:
         parts.append(f"12-month return: {r.twelve_month:+.1f}%")
@@ -296,7 +376,7 @@ def _stock_answer(store: RecommendationStore, symbol: str, stocks: list) -> str:
     c = s or compute_consensus(recs)
     if not c:
         return f"I don't have analyst data for {symbol} in this market yet."
-    named = [r for r in recs if r.firm][:6]
+    named = distinct_named_calls(recs)[:6]
     parts = [
         f"{c.symbol} ({getattr(c, 'company_name', None) or c.symbol}): "
         f"{c.buy_count} Buy / {c.hold_count} Hold / {c.sell_count} Sell "
@@ -325,10 +405,17 @@ def _rule_answer(
     q = question.lower()
     rated = [s for s in feed.stocks if s.total_count > 0]
 
-    # Specific stock (passed in, or mentioned in the question)
-    target = symbol or _detect_symbol(question, feed.stocks)
+    # Specific stock (passed in, mentioned by ticker/name, or a known alias)
+    target = _detect_symbol(question, feed.stocks) or _alias_symbol(question) or symbol
     if target:
-        return _stock_answer(store, target, feed.stocks)
+        answer = _stock_answer(store, target, feed.stocks)
+        if _needs_fundamentals(question):
+            from app.service import build_stock_overview
+            ov = build_stock_overview(target)
+            if ov and ov.fundamentals:
+                answer = (answer + "\n" if "don't have analyst data" not in answer else "") \
+                    + _fmt_fundamentals(ov.fundamentals) + "."
+        return answer
 
     if not rated:
         return "No analyst-rated stocks are in the feed yet for this market. Try ↻ Refresh now."
@@ -458,7 +545,7 @@ def _fmt_symbol(store: RecommendationStore, symbol: str) -> str:
     c = compute_consensus(recs)
     if not c:
         return ""
-    named = [r for r in recs if r.firm][:_MAX_NAMED]
+    named = distinct_named_calls(recs)[:_MAX_NAMED]
     firm_lines = [
         f"  {r.firm}: {r.action.upper()}"
         + (f" target ${r.target_price:g}" if r.target_price else "")
@@ -753,18 +840,17 @@ def _build_main_prompt(store: RecommendationStore, settings: Settings, question:
     feed_ctx = _fmt_feed(feed)
     lb = _fmt_leaderboard(store, market)
     # include stock context even when the symbol comes from question text
-    detected = symbol or _detect_symbol(question, feed.stocks)
-    sym_ctx = _fmt_symbol(store, detected) if detected else ""
-    if not sym_ctx and not detected:
-        # Not a tracked stock — try resolving it anyway (e.g. "Coca-Cola")
-        # so the answer uses real data instead of "not in my dataset".
-        untracked = _detect_untracked_symbol(question, market)
-        if untracked:
-            from app.service import build_stock_overview
-            ov = build_stock_overview(untracked)
-            if ov:
-                detected = untracked
-                sym_ctx = _fmt_overview(ov)
+    detected, tracked = _resolve_symbol(store, question, market, symbol, feed.stocks)
+    sym_ctx = _fmt_symbol(store, detected) if tracked else ""
+    if detected and not tracked:
+        # Not a tracked stock (e.g. "Coca-Cola"): answer from real market data
+        # instead of "not in my dataset".
+        from app.service import build_stock_overview
+        ov = build_stock_overview(detected)
+        if ov:
+            sym_ctx = _fmt_overview(ov)
+        else:
+            detected = None
     elif sym_ctx and detected and (_needs_fundamentals(question) or _needs_news(question)):
         # Tracked stock, but the question wants fundamentals (P/E, revenue…) or
         # company news — neither is in the analyst feed. Pull the overview in as
