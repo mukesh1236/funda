@@ -1070,6 +1070,38 @@ td .tick { color: var(--text); font-weight: 700; }
 .col { display: flex; flex-direction: column; }
 .sub { color: var(--muted); font-size: 12px; }
 
+/* ── Product tour ──────────────────────────────────────────────────────── */
+.tour-layer { position: fixed; inset: 0; z-index: 120; }
+.tour-layer.centered { background: var(--scrim); }
+/* The spotlight dims everything around the target with one oversized shadow. */
+.tour-spot {
+  position: fixed; border-radius: var(--radius); pointer-events: none;
+  box-shadow: 0 0 0 9999px var(--scrim), 0 0 0 2px var(--accent);
+}
+.tour-pop {
+  position: fixed; width: min(380px, calc(100vw - 24px)); padding: var(--sp-6) var(--sp-7);
+  background: var(--surface); color: var(--text); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); box-shadow: var(--shadow-pop);
+}
+.tour-layer.centered .tour-pop { top: 50%; left: 50%; transform: translate(-50%, -50%); }
+.tour-count { font-size: var(--fs-micro); font-weight: 600; letter-spacing: 0.04em; color: var(--muted); text-transform: uppercase; }
+.tour-title { margin: var(--sp-2) 0 var(--sp-3); font-size: var(--fs-title); font-weight: 600; letter-spacing: -0.01em; }
+.tour-body { margin: 0 0 var(--sp-6); font-size: var(--fs-body); line-height: 1.55; color: var(--text-2); }
+.tour-actions { display: flex; align-items: center; gap: var(--sp-4); }
+.tour-grow { flex: 1; }
+.tour-skip { background: none; border: none; padding: var(--sp-3) 0; color: var(--muted); font-size: var(--fs-body); text-decoration: underline; }
+.tour-skip:hover { color: var(--text); }
+.tour-actions .btn-primary, .tour-actions .ghost-btn { min-height: 36px; }
+@media (prefers-reduced-motion: no-preference) {
+  .tour-spot { transition: top 0.2s, left 0.2s, width 0.2s, height 0.2s; }
+}
+@media (max-width: 900px) { #tourBtn { display: none; } }   /* the account menu carries it on a phone */
+.welcome-skip {
+  width: 100%; margin-top: var(--sp-4); background: none; border: none; padding: var(--sp-4);
+  color: var(--muted); font-size: var(--fs-body); text-decoration: underline;
+}
+.welcome-skip:hover { color: var(--text); }
+
 /* ── Mobile tab bar (hidden on desktop) ────────────────────────────────── */
 .tabbar { display: none; }
 

@@ -1344,7 +1344,9 @@ $('#authForm').addEventListener('submit', async (e) => {
   if (_authMode === 'signup') body.display_name = $('#authName').value.trim();
   try {
     const user = await postJSON(path, body);
+    const wasSignup = _authMode === 'signup';
     onLoggedIn(user);
+    if (wasSignup) _autoTourForNewAccount();
   } catch (err) {
     $('#authError').textContent = err.message || 'Something went wrong.';
   }
@@ -1559,9 +1561,207 @@ $('#chatForm').addEventListener('submit', async (e) => {
     popup.hidden = true;
     try { localStorage.setItem('seen_welcome', '1'); } catch (e) {}
   };
-  const closeBtn = $('#welcomeClose'), gotItBtn = $('#welcomeGotIt');
+  const closeBtn = $('#welcomeClose'), gotItBtn = $('#welcomeGotIt'), tourBtn = $('#welcomeTour');
   if (closeBtn) closeBtn.addEventListener('click', dismiss);
   if (gotItBtn) gotItBtn.addEventListener('click', dismiss);
+  if (tourBtn) tourBtn.addEventListener('click', () => { dismiss(); startTour(); });
+})();
+
+// ── Product tour ─────────────────────────────────────────────────────────────
+// A guided walkthrough: one step per feature, each naming the real element, what
+// it does and why it helps. Plain DOM, no library. Each step lists candidate
+// selectors and the first VISIBLE one wins (the desktop nav is hidden on a phone,
+// where the tab bar stands in); a step whose target is missing is shown centred
+// rather than skipped, so the tour never breaks on an empty or loading page.
+// tests/test_tour.py checks every selector below still exists in the markup.
+const TOUR_STEPS = [
+  { title: 'Welcome to AlphaFunds',
+    body: 'Analyst opinion on US and Indian stocks and funds, in one place — and, just as important, whether their price targets actually came true. This takes about a minute.' },
+  { sel: ['#stats'], title: 'The market in four numbers',
+    body: 'Net-buy names counts stocks where analysts’ Buy ratings outnumber their Sells. Buy ratings is the share of all ratings that are Buy. Strongest consensus is the stock analysts agree on most, and Targets hit shows how often their price targets were reached. Why it helps: a read of market mood before you dig in.' },
+  { sel: ['#highlights'], title: 'What changed today',
+    body: 'Today’s analyst calls, the most-covered stocks, and the strongest buy and sell. Click a ticker for the detail. Why it helps: you see what analysts did today without hunting through the news.' },
+  { sel: ['#content tr.row'], title: 'Consensus, explained',
+    body: 'The bar splits the analysts into Buy (green), Hold (grey) and Sell (red). The bold number is the consensus score: Buys minus Sells. Confidence estimates how likely the price target is to be reached. Click a row to see why analysts like the stock, its fundamentals, who said what, and the news. Why it helps: you get the reasons, not just a rating.' },
+  { sel: ['.bar-filters'], title: 'Find and filter',
+    body: 'Search any ticker or company, switch between US and India, pick Today, 7 or 30 days, or narrow to a segment such as Semiconductors. Why it helps: go from the whole market to the one idea you care about.' },
+  { sel: ['.topnav [data-view="leaderboard"]', '.tabbar [data-view="leaderboard"]'], title: 'Who has been right',
+    body: 'Coverage & Leaders ranks stocks by consensus and by how often analysts’ targets were actually hit. Why it helps: weigh opinions by track record, not by volume.' },
+  { sel: ['.topnav [data-view="watchlist"]', '.tabbar [data-view="watchlist"]'], title: 'Your watchlist',
+    body: 'Pin stocks (a free sign-in) and see how each has moved since you pinned it, plus today’s move. Why it helps: your own ideas, next to what analysts think, in one list.' },
+  { sel: ['.topnav [data-view="funds"]', '.tabbar [data-view="funds"]'], title: 'Funds and fact sheets',
+    body: 'Track ETFs and mutual funds, compare two funds, see how much your funds overlap and what they really cost, and open a plain-English fact sheet built from the fund’s official SEC filing. Why it helps: you learn what you actually own and what it costs.' },
+  { sel: ['.topnav [data-view="digest"]', '.tabbar [data-view="digest"]'], title: 'Market Digest',
+    body: 'A daily briefing of macro and market headlines. Why it helps: the context behind why analysts and prices are moving.' },
+  { sel: ['#chatFab'], title: 'Ask AI',
+    body: 'Ask about any stock, even ones we do not track — “what are Caterpillar’s fundamentals?” — or about the data on screen, like which stocks have the best hit rates. Answers use real data and say what is missing. It is analysis, not investment advice.' },
+  { sel: ['#themeToggle'], title: 'Light or dark',
+    body: 'Switch the look any time. AlphaFunds remembers your choice on this device.' },
+  { sel: ['#avatarBtn'], title: 'Your account',
+    body: 'Sign in (free) to keep a watchlist and funds, connect WhatsApp to ask questions from your phone, and turn the “Market facts” tips on or off.' },
+  { sel: ['#tourBtn'], title: 'That is the tour',
+    body: 'Replay it whenever you like: the compass button in the header, or “Take a tour” in the account menu on a phone.' },
+];
+
+const _tourKey = () => 'tour_done_' + (_currentUser ? _currentUser.id : 'guest');
+function _tourDone() { try { return !!localStorage.getItem(_tourKey()); } catch (e) { return false; } }
+function _markTourDone() { try { localStorage.setItem(_tourKey(), '1'); } catch (e) {} }
+
+// A brand-new account sees the tour once, on this browser. Anyone who logs in to
+// an existing account does not get it pushed at them; the button is always there.
+function _autoTourForNewAccount() {
+  if (_tourDone()) return;
+  setTimeout(startTour, 500);
+}
+
+function _tourTarget(step) {
+  for (const s of step.sel || []) {
+    const el = document.querySelector(s);
+    if (el && el.getClientRects().length) return el;
+  }
+  return null;
+}
+
+function _waitFor(test, ms) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    (function poll() {
+      if (test() || Date.now() - t0 > ms) return resolve();
+      setTimeout(poll, 150);
+    })();
+  });
+}
+
+let _tour = null;
+
+async function startTour() {
+  if (_tour) return;
+  _tour = { i: 0, opener: document.activeElement };   // claim it before any await
+  try {
+    // The first steps describe the Overview, so make sure it is showing.
+    const popup = $('#welcomePopup');
+    if (popup && !popup.hidden) { popup.hidden = true; try { localStorage.setItem('seen_welcome', '1'); } catch (e) {} }
+    const menu = $('#acctMenu'); if (menu) menu.hidden = true;
+    if ($('#chatPanel') && !$('#chatPanel').hidden) toggleChat(false);
+    if (view !== 'feed') { view = 'feed'; render(); }
+    await _waitFor(() => document.querySelector('#content tr.row'), 8000);
+    window.scrollTo(0, 0);
+
+    const layer = el(`<div id="tourLayer" class="tour-layer" role="dialog" aria-modal="true" aria-labelledby="tourTitle">
+      <div class="tour-spot" aria-hidden="true"></div>
+      <div class="tour-pop">
+        <div class="tour-count" id="tourCount"></div>
+        <h3 class="tour-title" id="tourTitle"></h3>
+        <p class="tour-body" id="tourBody"></p>
+        <div class="tour-actions">
+          <button type="button" class="tour-skip" id="tourSkip">Skip tour</button>
+          <span class="tour-grow"></span>
+          <button type="button" class="ghost-btn" id="tourBack">Back</button>
+          <button type="button" class="btn-primary" id="tourNext">Next</button>
+        </div>
+      </div></div>`);
+    document.body.appendChild(layer);
+    Object.assign(_tour, {
+      layer, spot: layer.querySelector('.tour-spot'), pop: layer.querySelector('.tour-pop'),
+    });
+    $('#tourSkip').addEventListener('click', endTour);
+    $('#tourBack').addEventListener('click', () => _tourGo(_tour.i - 1));
+    $('#tourNext').addEventListener('click', () =>
+      _tour.i >= TOUR_STEPS.length - 1 ? endTour() : _tourGo(_tour.i + 1));
+    _tour.onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); endTour(); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); $('#tourNext').click(); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); $('#tourBack').click(); }
+      else if (e.key === 'Tab') {   // keep focus inside the dialog
+        const f = [...layer.querySelectorAll('button')];
+        const first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    _tour.onResize = () => _tourPlace();
+    document.addEventListener('keydown', _tour.onKey);
+    window.addEventListener('resize', _tour.onResize);
+    window.addEventListener('scroll', _tour.onResize, { passive: true });
+    _tourGo(0);
+  } catch (e) {
+    endTour(false);
+  }
+}
+
+function _tourGo(i) {
+  if (!_tour || i < 0 || i >= TOUR_STEPS.length) return;
+  _tour.i = i;
+  const s = TOUR_STEPS[i], last = i === TOUR_STEPS.length - 1;
+  $('#tourCount').textContent = `${i + 1} of ${TOUR_STEPS.length}`;
+  $('#tourTitle').textContent = s.title;
+  $('#tourBody').textContent = s.body;
+  $('#tourBack').hidden = i === 0;
+  $('#tourSkip').hidden = last;
+  $('#tourNext').textContent = last ? 'Done' : i === 0 ? 'Start' : 'Next';
+  const target = _tourTarget(s);
+  if (target) {
+    // Bring it into view with room below for the card. Fixed bars stay put.
+    if (target.closest('.tabbar')) { /* always on screen */ }
+    else if (target.closest('.topbar')) window.scrollTo(0, 0);
+    else {
+      // Leave room above for the sticky header (desktop), or a small margin where
+      // the header scrolls away (phone), so the target is never tucked under it.
+      const bar = document.querySelector('.topbar');
+      const clear = bar && getComputedStyle(bar).position === 'sticky' ? bar.offsetHeight + 24 : 96;
+      window.scrollTo(0, Math.max(0, target.getBoundingClientRect().top + window.scrollY - clear));
+    }
+  }
+  requestAnimationFrame(() => { _tourPlace(); $('#tourNext').focus({ preventScroll: true }); });
+}
+
+function _tourPlace() {
+  if (!_tour || !_tour.layer) return;
+  const { spot, pop, layer } = _tour;
+  const target = _tourTarget(TOUR_STEPS[_tour.i]);
+  const vw = document.documentElement.clientWidth, vh = window.innerHeight, m = 12;
+  if (!target) {                       // nothing to point at: a centred card
+    layer.classList.add('centered');
+    spot.style.display = 'none';
+    pop.style.left = pop.style.top = '';
+    return;
+  }
+  layer.classList.remove('centered');
+  const r = target.getBoundingClientRect(), pad = 6;
+  // A target taller than the screen (the stacked highlights on a phone) is
+  // clipped to what is visible, and the card sits over its lower part.
+  const top = Math.max(r.top - pad, m), bottom = Math.min(r.bottom + pad, vh - m);
+  const left = Math.max(r.left - pad, m / 2), right = Math.min(r.right + pad, vw - m / 2);
+  spot.style.display = 'block';
+  Object.assign(spot.style, { top: top + 'px', left: left + 'px',
+    width: Math.max(right - left, 0) + 'px', height: Math.max(bottom - top, 0) + 'px' });
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  const room = { below: vh - bottom, above: top };
+  let y;
+  if (room.below >= ph + m) y = bottom + m;
+  else if (room.above >= ph + m) y = top - ph - m;
+  else y = vh - ph - m - (target.closest('.tabbar') ? 0 : 72);   // over a tall target
+  y = Math.min(Math.max(y, m), Math.max(vh - ph - m, m));
+  const x = Math.min(Math.max(left + (right - left) / 2 - pw / 2, m), Math.max(vw - pw - m, m));
+  pop.style.top = y + 'px';
+  pop.style.left = x + 'px';
+}
+
+function endTour(markDone = true) {
+  if (!_tour) return;
+  const t = _tour; _tour = null;
+  if (markDone) _markTourDone();
+  document.removeEventListener('keydown', t.onKey);
+  window.removeEventListener('resize', t.onResize);
+  window.removeEventListener('scroll', t.onResize);
+  if (t.layer) t.layer.remove();
+  if (t.opener && t.opener.focus && document.contains(t.opener)) t.opener.focus({ preventScroll: true });
+}
+
+(function initTourButtons() {
+  const open = () => startTour();
+  const b = $('#tourBtn'); if (b) b.addEventListener('click', open);
+  const m = $('#tourMenu'); if (m) m.addEventListener('click', open);
 })();
 
 async function boot() {

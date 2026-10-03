@@ -44,6 +44,7 @@ docs/
 | [`rag-and-monitoring.md`](design/rag-and-monitoring.md) | Earlier design for retrieval and evaluation (partly superseded by `fund-factsheets.md`) |
 | [`ui-redesign.md`](design/ui-redesign.md) | Dashboard layout and palette |
 | [`analyst-summary.md`](design/analyst-summary.md) | How "why analysts recommend it" is built, and why it loads in two halves |
+| [`product-tour.md`](design/product-tour.md) | The guided tour: steps, when it starts, and the rules that keep it from breaking |
 | [`bottleneck-fix-plan.md`](design/bottleneck-fix-plan.md) | Performance review and plan |
 
 ## Keeping it true
