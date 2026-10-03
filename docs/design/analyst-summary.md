@@ -54,27 +54,10 @@ for callers that need it; the two paths share code, and a test asserts they agre
 - `_EXTRAS_CACHE` is bounded ([ADR 0010](../adr/0010-bounded-caches.md)) and cleared by
   "Refresh now" together with the detail cache.
 
-## Persisted extras
-
-The extras are stored in `stock_extras` and served stale-while-revalidate
-([ADR 0012](../adr/0012-persist-stock-detail.md)): under 6 hours old as-is, up to 7 days old
-served at once and refreshed on a background thread, otherwise rebuilt live. The daily job
-(`refresh_stock_details`) refreshes every tracked symbol, so in practice opening a row is one
-SQLite read.
-
-**Rules that must not change**
-
-- The summary is rebuilt from current ratings on every read; never store the finished summary.
-- A failed upstream call never overwrites good stored data, and an all-empty result is not
-  persisted when nothing is held.
-- The response carries `as_of`; the UI must keep saying the data is as of that time.
-- Only the LLM narrative is carried over from storage, reused for 20 hours.
-
 ## Known limits
 
-- The first open of a symbol that has no stored row (a newly tracked stock before the next
-  daily run) still waits for the live fetch, shown as placeholders.
-- Stored news can be hours old; `as_of` says how old.
-- `summarize.build_summary` (rule summary plus narrative, memoised per symbol per day) is no
-  longer on the request path; `service._assemble_extras` builds the summary directly. It is kept
-  because tests cover it; remove it together with its tests if it stays unused.
+- The summary is memoised per symbol per day (`_SUMMARY_CACHE`), so it does not change within
+  a day even if ratings do.
+- The first opener of a stock after a deploy or quiet spell still waits for the extras
+  (shown as placeholders now, not a blank panel). Persisting extras overnight is a separate,
+  not yet made, decision.

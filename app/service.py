@@ -1,7 +1,6 @@
 """Read-side helpers shared by the API and the daily job: build consensus
 feeds, per-symbol detail, and the leaderboard from stored data."""
 import logging
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 from typing import Dict, List, Optional
@@ -439,28 +438,23 @@ def build_detail_core(
     return detail
 
 
-# Persisted extras (table stock_extras) are served as-is while fresh, served AND
-# refreshed in the background while merely stale, and rebuilt live only when missing
-# or too old to trust. The daily job refreshes every tracked symbol, so in practice
-# opening a row is one SQLite read.
-_EXTRAS_FRESH_S = 6 * 3600
-_EXTRAS_MAX_AGE_S = 7 * 86400
-_NARRATIVE_REUSE_S = 20 * 3600     # one LLM call per symbol per day, not per refresh
-_refreshing: set = set()
-_refreshing_lock = threading.Lock()
+def build_detail_extras(
+    store: RecommendationStore, symbol: str, settings=None,
+    core: Optional[StockDetailResult] = None,
+) -> Optional[StockDetailExtras]:
+    """The slow half: four independent network fetches (run concurrently, not end
+    to end) plus the news-derived part of the summary and, when configured, the
+    LLM narrative. Cached; None when no ratings are tracked for the symbol, so
+    this is not an open proxy to Yahoo/SEC for arbitrary tickers."""
+    sym_key = symbol.upper().strip()
+    cached = _EXTRAS_CACHE.get(sym_key)
+    if cached is not None:
+        return cached
 
+    core = core or build_detail_core(store, symbol, settings)
+    if core is None:
+        return None
 
-def _own_empty(o: Optional[Ownership]) -> bool:
-    return o is None or not any([o.inst_pct, o.insider_pct, o.fund_holders,
-                                 o.institutions, o.funds, o.recent_buyers])
-
-
-def _fetch_extras_parts(symbol: str):
-    """The four independent network fetches, run concurrently rather than end to
-    end. Returns (news, ownership, fundamentals, insider_trades) as models. Each
-    source returns an empty value on failure, so this never raises for upstream
-    trouble."""
-    from app.models import InsiderTrade
     from app.sources.sec_insider import fetch_insider_trades
     with ThreadPoolExecutor(max_workers=4) as ex:
         f_news = ex.submit(get_news, symbol)
@@ -470,6 +464,7 @@ def _fetch_extras_parts(symbol: str):
         news_raw, own, fmap, raw_trades = (
             f_news.result(), f_own.result(), f_fund.result(), f_trades.result()
         )
+
     news = [NewsItem(**n) for n in news_raw]
     ownership = Ownership(
         inst_pct=own.get("inst_pct"), insider_pct=own.get("insider_pct"),
@@ -489,157 +484,24 @@ def _fetch_extras_parts(symbol: str):
         sector=fmap.get("sector"), industry=fmap.get("industry"),
         notes=build_fundamentals_notes(fmap),
     ) if fmap else None
-    return news, ownership, fundamentals, [InsiderTrade(**t) for t in raw_trades]
 
+    from app.models import InsiderTrade
+    insider_trades = [InsiderTrade(**t) for t in raw_trades]
 
-def _assemble_extras(core, news, ownership, fundamentals, trades, narrative, as_of,
-                     settings) -> StockDetailExtras:
-    """Join stored/fetched parts into the response. The summary is rebuilt from the
-    CURRENT ratings every time (cheap, rule-based), so it never disagrees with the
-    consensus shown beside it even when the parts are hours old; only the LLM
-    narrative, which costs money, is carried over from storage."""
+    # "Why analysts recommend" summary with the news-derived reason and the
+    # optional LLM narrative. Handed back only when it differs from the instant
+    # one, so the UI re-renders that block only when there is something new.
     from app.config import get_settings
-    from app.summarize import build_rule_summary
-    settings = settings or get_settings()
-    summary = build_rule_summary(core.model_copy(update={"news": news}))
-    if narrative:
-        summary.narrative = narrative
-        summary.source = settings.summary_provider
-    return StockDetailExtras(
+    from app.summarize import build_summary
+    full = core.model_copy(update={"news": news})
+    summary = build_summary(full, settings or get_settings())
+    extras = StockDetailExtras(
         symbol=core.symbol, ownership=ownership, fundamentals=fundamentals,
-        news=news, insider_trades=trades, as_of=as_of,
-        # Handed back only when it differs from the instant one, so the UI
-        # re-renders that block only when there is something new.
+        news=news, insider_trades=insider_trades,
         summary=summary if summary != core.summary else None,
     )
-
-
-def _load_stored(store: RecommendationStore, sym: str):
-    """(parts dict, fetched_at, age_seconds) from the table, or None when absent or
-    unreadable. An unreadable row (schema drift) is treated as missing, never as an
-    error: the caller simply rebuilds it."""
-    import json
-    from app.models import InsiderTrade
-    row = store.get_stock_extras(sym)
-    if not row:
-        return None
-    try:
-        raw = json.loads(row["payload"])
-        parts = {
-            "news": [NewsItem(**n) for n in raw.get("news", [])],
-            "ownership": Ownership(**raw["ownership"]) if raw.get("ownership") else None,
-            "fundamentals": Fundamentals(**raw["fundamentals"]) if raw.get("fundamentals") else None,
-            "trades": [InsiderTrade(**t) for t in raw.get("insider_trades", [])],
-            "narrative": raw.get("narrative"),
-        }
-        age = (datetime.now(timezone.utc) - datetime.fromisoformat(row["fetched_at"])).total_seconds()
-    except Exception as e:
-        logger.warning("stock_extras row for %s unreadable (%s); rebuilding", sym, e)
-        return None
-    return parts, row["fetched_at"], age
-
-
-def refresh_stock_extras(
-    store: RecommendationStore, symbol: str, settings=None,
-    core: Optional[StockDetailResult] = None,
-) -> Optional[StockDetailExtras]:
-    """Fetch the slow half live, persist it, and return it. This is what the daily
-    job runs for every tracked symbol, and what a background refresh runs when a
-    stored row has gone stale. None when no ratings are tracked for the symbol."""
-    import json
-    from app.config import get_settings
-    from app.summarize import maybe_llm_narrative
-    settings = settings or get_settings()
-    sym_key = symbol.upper().strip()
-    core = core or build_detail_core(store, symbol, settings)
-    if core is None:
-        return None
-
-    news, ownership, fundamentals, trades = _fetch_extras_parts(symbol)
-    stored = _load_stored(store, sym_key)
-    prev, prev_age = (stored[0], stored[2]) if stored else (None, None)
-
-    # A failed upstream call looks like "no data", so never let it erase good data
-    # we already hold: keep the stored value for any part that came back empty.
-    if prev:
-        news = news or prev["news"]
-        fundamentals = fundamentals or prev["fundamentals"]
-        ownership = prev["ownership"] if _own_empty(ownership) else ownership
-
-    narrative = prev["narrative"] if prev and prev_age is not None and prev_age < _NARRATIVE_REUSE_S else None
-    if not narrative and (news or fundamentals):
-        narrative = maybe_llm_narrative(core.model_copy(update={"news": news}), settings)
-    if not narrative and prev:
-        narrative = prev["narrative"]    # LLM unavailable: keep the last good one
-
-    nothing = not news and not fundamentals and _own_empty(ownership) and not trades
-    if nothing and not prev:
-        # Every source came back empty and we hold nothing: do not persist an empty
-        # row that would be served as authoritative for the next 7 days.
-        return _assemble_extras(core, news, ownership, fundamentals, trades, None, None, settings)
-
-    as_of = store.put_stock_extras(sym_key, json.dumps({
-        "news": [n.model_dump(mode="json") for n in news],
-        "ownership": ownership.model_dump(mode="json") if not _own_empty(ownership) else None,
-        "fundamentals": fundamentals.model_dump(mode="json") if fundamentals else None,
-        "insider_trades": [t.model_dump(mode="json") for t in trades],
-        "narrative": narrative,
-    }))
-    extras = _assemble_extras(core, news, ownership, fundamentals, trades, narrative, as_of, settings)
     _EXTRAS_CACHE[sym_key] = extras
     return extras
-
-
-def _refresh_in_background(store: RecommendationStore, sym: str, settings=None):
-    """Refresh one symbol on a daemon thread, at most one at a time per symbol, so
-    a stale row is served instantly now and is fresh for the next reader."""
-    with _refreshing_lock:
-        if sym in _refreshing:
-            return None
-        _refreshing.add(sym)
-
-    def _run():
-        try:
-            refresh_stock_extras(store, sym, settings)
-        except Exception as e:
-            logger.warning("background extras refresh failed for %s: %s", sym, e)
-        finally:
-            with _refreshing_lock:
-                _refreshing.discard(sym)
-
-    th = threading.Thread(target=_run, name=f"extras-refresh-{sym}", daemon=True)
-    th.start()
-    return th
-
-
-def build_detail_extras(
-    store: RecommendationStore, symbol: str, settings=None,
-    core: Optional[StockDetailResult] = None,
-) -> Optional[StockDetailExtras]:
-    """The slow half of a stock's detail. Served from the persisted row when there
-    is one (the common case: instant), and rebuilt live only when it is missing or
-    older than a week. None when no ratings are tracked for the symbol, so this is
-    not an open proxy to Yahoo/SEC for arbitrary tickers."""
-    sym_key = symbol.upper().strip()
-    cached = _EXTRAS_CACHE.get(sym_key)
-    if cached is not None:
-        return cached
-
-    core = core or build_detail_core(store, symbol, settings)
-    if core is None:
-        return None
-
-    stored = _load_stored(store, sym_key)
-    if stored and stored[2] <= _EXTRAS_MAX_AGE_S:
-        parts, fetched_at, age = stored
-        extras = _assemble_extras(core, parts["news"], parts["ownership"], parts["fundamentals"],
-                                  parts["trades"], parts["narrative"], fetched_at, settings)
-        if age > _EXTRAS_FRESH_S:
-            _refresh_in_background(store, sym_key, settings)
-        _EXTRAS_CACHE[sym_key] = extras
-        return extras
-
-    return refresh_stock_extras(store, symbol, settings, core=core)
 
 
 _OVERVIEW_CACHE: TTLCache = TTLCache(maxsize=256, ttl=600)  # 10 min — generic data, needn't be tick-fresh

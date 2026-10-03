@@ -254,7 +254,6 @@ class StockDetailExtras(BaseModel):
     fundamentals: Optional[Fundamentals] = None
     news: List[NewsItem] = []
     insider_trades: List[InsiderTrade] = []
-    as_of: Optional[str] = None        # when the data was fetched (ISO, UTC)
     # Present only when the news-derived reason or an LLM narrative changed the
     # summary; None means the instant summary stands.
     summary: Optional[AnalystSummary] = None

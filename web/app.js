@@ -683,8 +683,6 @@ function _fillExtras(body, core, ex) {
       if (d && wasOpen) d.open = true;
     }
   }
-  const asOf = body.querySelector('[data-slot="asof"]');
-  if (asOf) asOf.textContent = _asOf(ex);
   const retry = body.querySelector('[data-extras-retry]');
   if (retry) retry.addEventListener('click', () => {
     const entry = detailCache[core.symbol];
@@ -842,15 +840,7 @@ function renderDetail(d, ex) {
       <div data-slot="ownership">${slots.ownership}</div>
       <div data-slot="news">${slots.news}</div>
     </div>
-    ${knowMore}
-    <div class="as-of" data-slot="asof">${esc(_asOf(ex))}</div>`;
-}
-
-// When the slow half was fetched. It is stored, not live, so say so.
-function _asOf(ex) {
-  if (!ex || ex.error || !ex.as_of) return '';
-  const d = new Date(ex.as_of);
-  return isNaN(d) ? '' : `Fundamentals and news as of ${_fmtTimestamp(d)}`;
+    ${knowMore}`;
 }
 
 async function loadLeaderboard() {

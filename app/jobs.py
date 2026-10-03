@@ -176,38 +176,6 @@ def refresh_profiles(store: RecommendationStore, settings: Settings) -> int:
     return updated
 
 
-def refresh_stock_details(store: RecommendationStore, settings: Settings,
-                          budget_seconds: float = 20 * 60) -> int:
-    """Refresh the persisted detail (fundamentals, ownership, news) of every tracked
-    stock, so no reader waits on Yahoo or SEC. Two workers, each fanning out four
-    fetches, keeps the upstream pressure modest; a wall-clock budget stops a slow
-    day from running into the next job. A failure on one symbol never stops the rest,
-    and a symbol that fails keeps its previous row (see refresh_stock_extras)."""
-    import time
-    from app.service import refresh_stock_extras
-
-    symbols = store.all_symbols()
-    deadline = time.monotonic() + budget_seconds
-
-    def _one(symbol: str) -> bool:
-        if time.monotonic() > deadline:
-            return False
-        return refresh_stock_extras(store, symbol, settings) is not None
-
-    done = 0
-    with ThreadPoolExecutor(max_workers=2) as ex:
-        futures = {ex.submit(_one, s): s for s in symbols}
-        for f in as_completed(futures):
-            try:
-                if f.result():
-                    done += 1
-            except Exception as e:
-                logger.warning("stock detail refresh failed for %s: %s", futures[f], e)
-
-    logger.info("stock details: refreshed %d of %d symbols", done, len(symbols))
-    return done
-
-
 def _format_brief(user_symbols: list, fund_symbols: list, by_symbol: dict,
                    fallback_top: list) -> str:
     """Personalized text for one user: their watchlist/fund picks if any,
@@ -294,11 +262,6 @@ def run_daily(
     inserted = collect(store, settings)
     hits = validate(store, settings)
     refresh_profiles(store, settings)
-    if settings.precompute_stock_details:
-        try:
-            refresh_stock_details(store, settings)
-        except Exception as e:  # an enrichment step must not fail the daily run
-            logger.error("Stock detail refresh error: %s", e)
 
     feed = build_feed(store, days=1)
     top = feed.stocks[:10]

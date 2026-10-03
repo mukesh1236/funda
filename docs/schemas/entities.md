@@ -14,7 +14,6 @@ Do not edit it by hand. The prose above it is hand-written.
 | **Core product** | `recommendations` | One analyst call. **Append-only**: never update or delete rows; the accumulated history is the product's asset. |
 | | `outcomes` | Scored result of a recommendation: `hit`, `missed`, `pending` or `expired`. 1:1 with `recommendations`, cascades on delete. |
 | | `profiles` | Per-symbol cached profile: company name, 1/3/6/12-month returns, institutional ownership. |
-| | `stock_extras` | The slow half of a stock's detail panel (fundamentals, ownership, news, insider trades, optional LLM narrative) as one JSON payload per symbol, refreshed by the daily job. **Derived data: safe to delete**, it is rebuilt on demand. |
 | **Accounts** | `users` | Accounts. `role` is `user`, `beta` or `admin`. |
 | | `password_reset_tokens` | Single-use, short-TTL reset links. |
 | | `watchlist` | Per-user pinned stocks, with the price captured on the pin day. Composite key `(user_id, symbol, grp)`. |
@@ -66,7 +65,7 @@ what every other part of the app already passes around.
 
 <!-- BEGIN GENERATED: scripts/export_schema_doc.py -->
 
-19 tables, generated from `app/store.py::_SCHEMA`.
+18 tables, generated from `app/store.py::_SCHEMA`.
 
 ### `chat_answers`
 
@@ -248,14 +247,6 @@ Indexes: `unique (symbol, source, IFNULL(firm, ''), action, entry_date)`; `(entr
 | `cusip` | TEXT | no |  | PK |
 | `ticker` | TEXT | yes |  |  |
 | `name` | TEXT | yes |  |  |
-
-### `stock_extras`
-
-| column | type | null | default | notes |
-|---|---|---|---|---|
-| `symbol` | TEXT | no |  | PK |
-| `payload` | TEXT | no |  | JSON: fundamentals, ownership, news, insider_trades, narrative |
-| `fetched_at` | TEXT | no |  |  |
 
 ### `users`
 
