@@ -259,6 +259,66 @@ class StockDetailExtras(BaseModel):
     summary: Optional[AnalystSummary] = None
 
 
+# ── What if I had bought / scoreboard (hypothetical returns) ──────────────────
+
+class WhatIfPoint(BaseModel):
+    date: str
+    value: float                         # the stock position's value that day
+    benchmark: Optional[float] = None    # the same amount held in the index
+
+
+class WhatIfBenchmark(BaseModel):
+    symbol: str
+    name: str
+    value_now: float
+    gain_pct: float
+
+
+class WhatIfResult(BaseModel):
+    symbol: str
+    amount: float
+    start_requested: str
+    entry_date: str                      # first trading day on or after the requested date
+    entry_price: float
+    last_date: str
+    last_price: float
+    shares: float
+    value_now: float
+    gain: float
+    gain_pct: float
+    days: int
+    benchmark: Optional[WhatIfBenchmark] = None
+    excess_pct: Optional[float] = None   # gain_pct minus the benchmark's, in points
+    series: List[WhatIfPoint] = []
+    notes: List[str] = []
+
+
+class ScoreboardHorizon(BaseModel):
+    days: int
+    snapshots: int = 0                   # weekly picks that had a full window
+    picks: int = 0                       # individual stock results behind the averages
+    avg_return_pct: Optional[float] = None
+    median_pick_return_pct: Optional[float] = None
+    pct_picks_up: Optional[float] = None
+    benchmark_avg_return_pct: Optional[float] = None
+    avg_excess_pct: Optional[float] = None
+    pct_snapshots_beating_benchmark: Optional[float] = None
+
+
+class ScoreboardResult(BaseModel):
+    market: str
+    status: str = "ready"                # ready | computing | unavailable
+    top_n: int = 10
+    min_analysts: int = 5
+    since: Optional[str] = None          # first recommendation on record
+    until: Optional[str] = None          # latest price used
+    snapshots: int = 0                   # weekly pick dates in total
+    benchmark_symbol: Optional[str] = None
+    benchmark_name: Optional[str] = None
+    horizons: List[ScoreboardHorizon] = []
+    notes: List[str] = []
+
+
 class LeaderboardEntry(BaseModel):
     symbol: str
     consensus_score: int

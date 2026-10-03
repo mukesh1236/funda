@@ -411,6 +411,82 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/whatif:
+    get:
+      summary: What If Endpoint
+      description: 'What `amount` put into `symbol` on `start` would be worth now, next to the
+
+        same amount in the market index. A simulation on past prices; nothing is stored.'
+      operationId: what_if_endpoint_api_whatif_get
+      parameters:
+      - name: symbol
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Symbol
+      - name: start
+        in: query
+        required: true
+        schema:
+          type: string
+          format: date
+          description: Buy on the first trading day on or after this date
+          title: Start
+        description: Buy on the first trading day on or after this date
+      - name: amount
+        in: query
+        required: false
+        schema:
+          type: number
+          maximum: 10000000
+          exclusiveMinimum: 0
+          default: 1000.0
+          title: Amount
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WhatIfResult'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/scoreboard:
+    get:
+      summary: Scoreboard Endpoint
+      description: 'How the strongest analyst consensus has performed against the market index,
+
+        week by week since recording began. Built in the background on first use
+
+        (status "computing"; poll), then cached for six hours.'
+      operationId: scoreboard_endpoint_api_scoreboard_get
+      parameters:
+      - name: market
+        in: query
+        required: false
+        schema:
+          type: string
+          pattern: ^(us|in)$
+          default: us
+          title: Market
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScoreboardResult'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/recommendations/{symbol}/core:
     get:
       summary: Detail Core
@@ -2522,6 +2598,110 @@ components:
           title: Twelve Month
       type: object
       title: Returns
+    ScoreboardHorizon:
+      properties:
+        days:
+          type: integer
+          title: Days
+        snapshots:
+          type: integer
+          title: Snapshots
+          default: 0
+        picks:
+          type: integer
+          title: Picks
+          default: 0
+        avg_return_pct:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Avg Return Pct
+        median_pick_return_pct:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Median Pick Return Pct
+        pct_picks_up:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Pct Picks Up
+        benchmark_avg_return_pct:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Benchmark Avg Return Pct
+        avg_excess_pct:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Avg Excess Pct
+        pct_snapshots_beating_benchmark:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Pct Snapshots Beating Benchmark
+      type: object
+      required:
+      - days
+      title: ScoreboardHorizon
+    ScoreboardResult:
+      properties:
+        market:
+          type: string
+          title: Market
+        status:
+          type: string
+          title: Status
+          default: ready
+        top_n:
+          type: integer
+          title: Top N
+          default: 10
+        min_analysts:
+          type: integer
+          title: Min Analysts
+          default: 5
+        since:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Since
+        until:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Until
+        snapshots:
+          type: integer
+          title: Snapshots
+          default: 0
+        benchmark_symbol:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Benchmark Symbol
+        benchmark_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Benchmark Name
+        horizons:
+          items:
+            $ref: '#/components/schemas/ScoreboardHorizon'
+          type: array
+          title: Horizons
+          default: []
+        notes:
+          items:
+            type: string
+          type: array
+          title: Notes
+          default: []
+      type: object
+      required:
+      - market
+      title: ScoreboardResult
     SetRoleRequest:
       properties:
         role:
@@ -2813,6 +2993,119 @@ components:
       required:
       - items
       title: WatchlistResult
+    WhatIfBenchmark:
+      properties:
+        symbol:
+          type: string
+          title: Symbol
+        name:
+          type: string
+          title: Name
+        value_now:
+          type: number
+          title: Value Now
+        gain_pct:
+          type: number
+          title: Gain Pct
+      type: object
+      required:
+      - symbol
+      - name
+      - value_now
+      - gain_pct
+      title: WhatIfBenchmark
+    WhatIfPoint:
+      properties:
+        date:
+          type: string
+          title: Date
+        value:
+          type: number
+          title: Value
+        benchmark:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Benchmark
+      type: object
+      required:
+      - date
+      - value
+      title: WhatIfPoint
+    WhatIfResult:
+      properties:
+        symbol:
+          type: string
+          title: Symbol
+        amount:
+          type: number
+          title: Amount
+        start_requested:
+          type: string
+          title: Start Requested
+        entry_date:
+          type: string
+          title: Entry Date
+        entry_price:
+          type: number
+          title: Entry Price
+        last_date:
+          type: string
+          title: Last Date
+        last_price:
+          type: number
+          title: Last Price
+        shares:
+          type: number
+          title: Shares
+        value_now:
+          type: number
+          title: Value Now
+        gain:
+          type: number
+          title: Gain
+        gain_pct:
+          type: number
+          title: Gain Pct
+        days:
+          type: integer
+          title: Days
+        benchmark:
+          anyOf:
+          - $ref: '#/components/schemas/WhatIfBenchmark'
+          - type: 'null'
+        excess_pct:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Excess Pct
+        series:
+          items:
+            $ref: '#/components/schemas/WhatIfPoint'
+          type: array
+          title: Series
+          default: []
+        notes:
+          items:
+            type: string
+          type: array
+          title: Notes
+          default: []
+      type: object
+      required:
+      - symbol
+      - amount
+      - start_requested
+      - entry_date
+      - entry_price
+      - last_date
+      - last_price
+      - shares
+      - value_now
+      - gain
+      - gain_pct
+      - days
+      title: WhatIfResult
     XRayHolding:
       properties:
         name:

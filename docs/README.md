@@ -45,6 +45,7 @@ docs/
 | [`ui-redesign.md`](design/ui-redesign.md) | Dashboard layout and palette |
 | [`analyst-summary.md`](design/analyst-summary.md) | How "why analysts recommend it" is built, and why it loads in two halves |
 | [`product-tour.md`](design/product-tour.md) | The guided tour: steps, when it starts, and the rules that keep it from breaking |
+| [`what-if-and-scoreboard.md`](design/what-if-and-scoreboard.md) | "What if I'd bought?" and the analyst scoreboard: honesty rules, caches, and the decided paper-account plan |
 | [`bottleneck-fix-plan.md`](design/bottleneck-fix-plan.md) | Performance review and plan |
 
 ## Keeping it true

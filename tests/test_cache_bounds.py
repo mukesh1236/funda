@@ -15,14 +15,19 @@ import pytest
 
 from cachetools import Cache
 
+import app.backtest as backtest
 import app.fund_rag as rag
 import app.service as service
+import app.sources.history as history
 
 
 CACHES = [
     ("service._DAY_CHANGE_CACHE", service._DAY_CHANGE_CACHE),
     ("service._DETAIL_CACHE", service._DETAIL_CACHE),
     ("service._EXTRAS_CACHE", service._EXTRAS_CACHE),
+    ("history._CLOSES_CACHE", history._CLOSES_CACHE),
+    ("backtest._SCORE_CACHE", backtest._SCORE_CACHE),
+    ("backtest._SCORE_FAILED", backtest._SCORE_FAILED),
     ("service._OVERVIEW_CACHE", service._OVERVIEW_CACHE),
     ("fund_rag._cache", rag._cache),
 ]

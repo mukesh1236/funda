@@ -837,10 +837,171 @@ function renderDetail(d, ex) {
     <div data-slot="fundamentals">${slots.fundamentals}</div>
     <div class="more-list">
       ${moreSection('Analyst calls', named.length || null, analysts)}
+      ${moreSection('What if I’d bought?', null, _whatIfForm(d))}
       <div data-slot="ownership">${slots.ownership}</div>
       <div data-slot="news">${slots.news}</div>
     </div>
     ${knowMore}`;
+}
+
+// ── What if I'd bought? ──────────────────────────────────────────────────────
+// A simulation on past prices (GET /api/whatif); nothing is bought or stored.
+const _iso = (d) => d.toISOString().slice(0, 10);
+const _daysAgoISO = (n) => _iso(new Date(Date.now() - n * 86400000));
+
+function _money(cur, v) {
+  const loc = cur === '₹' ? 'en-IN' : 'en-US';
+  return cur + Number(v).toLocaleString(loc, { maximumFractionDigits: Math.abs(v) < 1000 ? 2 : 0 });
+}
+function _fmtDay(iso) {
+  const d = new Date(iso + 'T00:00:00');
+  return isNaN(d) ? iso : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function _whatIfForm(d) {
+  const india = /\.(NS|BO)$/i.test(d.symbol);
+  const cur = india ? '₹' : '$';
+  const tracked = (d.recommendations || []).map(r => r.entry_date).filter(Boolean).sort()[0];
+  const presets = [['1 month ago', 30], ['3 months ago', 91], ['6 months ago', 182], ['1 year ago', 365]];
+  const chips = presets.map(([label, n]) =>
+    `<button type="button" class="chip whatif-preset" data-date="${_daysAgoISO(n)}">${label}</button>`).join('') +
+    (tracked ? `<button type="button" class="chip whatif-preset" data-date="${esc(tracked)}">Since we started tracking</button>` : '');
+  return `<div class="whatif" data-sym="${esc(d.symbol)}" data-cur="${cur}">
+    <p class="muted whatif-intro">See what an amount put into ${esc(d.symbol)} on a past day would be worth today, next to simply holding the market index. A simulation: nothing is bought.</p>
+    <div class="whatif-form">
+      <label class="whatif-field"><span>Amount</span>
+        <span class="whatif-amt"><span class="whatif-cur">${cur}</span>
+          <input class="whatif-amount" type="number" min="1" max="10000000" step="any" inputmode="decimal" value="${india ? 100000 : 1000}"></span></label>
+      <label class="whatif-field"><span>Bought on</span>
+        <input class="whatif-date" type="date" min="2000-01-01" max="${_daysAgoISO(1)}" value="${_daysAgoISO(91)}"></label>
+      <button type="button" class="btn-primary whatif-go">Show me</button>
+    </div>
+    <div class="whatif-presets">${chips}</div>
+    <div class="whatif-out" aria-live="polite"></div>
+  </div>`;
+}
+
+function _whatIfChart(series) {
+  const pts = series.filter(p => p.value != null);
+  if (pts.length < 2) return '';
+  const vals = pts.flatMap(p => [p.value, p.benchmark]).filter(v => v != null);
+  const lo = Math.min(...vals), hi = Math.max(...vals), span = (hi - lo) || 1;
+  const x = (i) => (i / (pts.length - 1) * 300).toFixed(1);
+  const y = (v) => (58 - (v - lo) / span * 52).toFixed(1);
+  const line = (key) => pts.map((p, i) => p[key] != null ? `${x(i)},${y(p[key])}` : null).filter(Boolean).join(' ');
+  const bench = pts.some(p => p.benchmark != null)
+    ? `<polyline class="wi-bench" points="${line('benchmark')}"/>` : '';
+  return `<svg class="wi-chart" viewBox="0 0 300 64" preserveAspectRatio="none" role="img"
+      aria-label="Value over time, compared with the index">${bench}<polyline class="wi-line" points="${line('value')}"/></svg>`;
+}
+
+function _whatIfResult(r, cur) {
+  const b = r.benchmark;
+  const verdict = b && r.excess_pct != null
+    ? `<p class="wi-verdict ${r.excess_pct >= 0 ? 'gain' : 'loss'}">${icon(r.excess_pct >= 0 ? 'arrow-up' : 'arrow-down', 'ic xs')}${Math.abs(r.excess_pct).toFixed(1)} percentage points ${r.excess_pct >= 0 ? 'ahead of' : 'behind'} the index</p>` : '';
+  const benchLine = b
+    ? `<p class="wi-bench-line"><span class="wi-key wi-key-bench"></span>${esc(b.name)}: ${_money(cur, r.amount)} would be ${_money(cur, b.value_now)} (${ret(b.gain_pct)})</p>` : '';
+  return `<div class="wi-card">
+    <p class="wi-headline"><span class="wi-key"></span>${_money(cur, r.amount)} in <b>${esc(r.symbol)}</b> on ${esc(_fmtDay(r.entry_date))} would be worth
+      <b class="${r.gain >= 0 ? 'gain' : 'loss'}">${_money(cur, r.value_now)}</b> today (${ret(r.gain_pct)}, ${r.days} days).</p>
+    ${benchLine}${verdict}
+    ${_whatIfChart(r.series || [])}
+    <p class="muted wi-foot">Bought at the ${esc(_fmtDay(r.entry_date))} close, priced at the ${esc(_fmtDay(r.last_date))} close. ${esc((r.notes || []).join(' '))}</p>
+  </div>`;
+}
+
+async function _runWhatIf(box) {
+  const out = box.querySelector('.whatif-out');
+  const sym = box.dataset.sym, cur = box.dataset.cur;
+  const amount = parseFloat(box.querySelector('.whatif-amount').value);
+  const start = box.querySelector('.whatif-date').value;
+  if (!(amount > 0)) { out.innerHTML = '<p class="muted">Enter an amount above zero.</p>'; return; }
+  if (!start) { out.innerHTML = '<p class="muted">Pick a date.</p>'; return; }
+  out.innerHTML = '<div class="slot-skel"><span class="skel" style="width:80%"></span><span class="skel" style="width:60%"></span></div>';
+  try {
+    const res = await fetch(`${API}/api/whatif?symbol=${encodeURIComponent(sym)}&start=${encodeURIComponent(start)}&amount=${amount}`);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = typeof body.detail === 'string' ? body.detail : 'That could not be worked out.';
+      out.innerHTML = `<p class="muted">${esc(msg)}</p>`;
+      return;
+    }
+    out.innerHTML = _whatIfResult(body, cur);
+  } catch (e) {
+    out.innerHTML = '<p class="muted">Could not load prices right now. Try again in a moment.</p>';
+  }
+}
+
+// One delegated handler: the panels are rendered as strings inside expanders.
+document.addEventListener('click', (e) => {
+  const chip = e.target.closest('.whatif-preset');
+  if (chip) {
+    const box = chip.closest('.whatif');
+    box.querySelector('.whatif-date').value = chip.dataset.date;
+    _runWhatIf(box);
+    return;
+  }
+  const go = e.target.closest('.whatif-go');
+  if (go) _runWhatIf(go.closest('.whatif'));
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.closest && e.target.closest('.whatif-form')) {
+    e.preventDefault();
+    _runWhatIf(e.target.closest('.whatif'));
+  }
+});
+
+// ── Scoreboard: how the strongest consensus has performed ────────────────────
+function _scoreboardTile(h, bench, since) {
+  if (!h.snapshots) {
+    return `<div class="sb-tile"><div class="sb-days">After ${h.days} days</div>
+      <p class="muted sb-empty">Not enough history yet: this needs a full ${h.days}-day window after the first picks (recording began ${esc(_fmtDay(since))}).</p></div>`;
+  }
+  const beat = h.pct_snapshots_beating_benchmark != null
+    ? ` · beat the index in ${Math.round(h.pct_snapshots_beating_benchmark)}% of weeks` : '';
+  return `<div class="sb-tile"><div class="sb-days">After ${h.days} days</div>
+    <div class="sb-big">${ret(h.avg_return_pct)}</div>
+    <div class="sb-line muted">${esc(bench)}: ${h.benchmark_avg_return_pct != null ? ret(h.benchmark_avg_return_pct) : '—'}</div>
+    <div class="sb-line muted">${Math.round(h.pct_picks_up)}% of picks were up${beat}</div>
+    <div class="sb-n muted">${h.snapshots} weekly picks · ${h.picks} results</div></div>`;
+}
+
+function _renderScoreboard(box, d) {
+  if (d.status === 'computing') {
+    box.innerHTML = `${_sbHead(d)}<div class="slot-skel"><span class="skel" style="width:70%"></span><span class="skel" style="width:50%"></span></div>
+      <p class="muted">${esc((d.notes || [''])[0])}</p>`;
+    return;
+  }
+  if (d.status === 'unavailable') {
+    box.innerHTML = `${_sbHead(d)}<p class="muted">${esc((d.notes || [''])[0])}</p>`;
+    return;
+  }
+  const any = (d.horizons || []).some(h => h.snapshots);
+  const tiles = (d.horizons || []).map(h => _scoreboardTile(h, d.benchmark_name || 'the index', d.since || '')).join('');
+  box.innerHTML = `${_sbHead(d)}
+    ${d.since ? '' : '<p class="muted">There is not enough recorded history to score anything yet.</p>'}
+    ${any || d.since ? `<div class="sb-grid">${tiles}</div>` : ''}
+    <details class="more sb-notes"><summary>${icon('chevron-right', 'ic xs more-caret')}<span>How to read this</span></summary>
+      <div class="more-body"><ul>${(d.notes || []).map(n => `<li>${esc(n)}</li>`).join('')}</ul></div></details>`;
+}
+
+function _sbHead(d) {
+  const since = d.since ? ` since ${esc(_fmtDay(d.since))}` : '';
+  return `<h3 class="sb-title">${icon('trending-up', 'ic sm')}How have the top calls performed?</h3>
+    <p class="muted sb-sub">If you had put equal money into the ${d.top_n || 10} stocks with the strongest analyst consensus each week${since}, then held them. Hypothetical, compared with simply holding the index.</p>`;
+}
+
+async function _loadScoreboard(tries = 0) {
+  const box = document.getElementById('scoreboard');
+  if (!box || view !== 'leaderboard') return;
+  try {
+    const d = await getJSON(`/api/scoreboard?market=${currentMarket()}`);
+    if (!document.getElementById('scoreboard')) return;
+    _renderScoreboard(box, d);
+    if (d.status === 'computing' && tries < 20) setTimeout(() => _loadScoreboard(tries + 1), 5000);
+  } catch (e) {
+    box.innerHTML = `${_sbHead({})}<p class="muted">The scoreboard could not load right now.</p>`;
+  }
 }
 
 async function loadLeaderboard() {
@@ -860,11 +1021,13 @@ async function loadLeaderboard() {
     </tr>
     <tr class="expand" data-for="${e.symbol}" style="display:none"><td colspan="6"><div class="expand-inner" data-body="${e.symbol}"></div></td></tr>`).join('');
   $('#content').innerHTML = `
+    <section class="card scoreboard" id="scoreboard">${waitingHtml('Loading the scoreboard…', 'analysts')}</section>
     <table><thead><tr>
       <th>Rank</th><th>Stock</th><th>Score</th><th>Analysts</th><th>Hit rate</th><th>Resolved</th>
     </tr></thead><tbody>${rows}</tbody></table>`;
   $('#content').querySelectorAll('tr.row').forEach(tr =>
     tr.addEventListener('click', () => toggleExpand(tr)));
+  _loadScoreboard();
 }
 
 function sparkline(daily) {
@@ -1582,11 +1745,11 @@ const TOUR_STEPS = [
   { sel: ['#highlights'], title: 'What changed today',
     body: 'Today’s analyst calls, the most-covered stocks, and the strongest buy and sell. Click a ticker for the detail. Why it helps: you see what analysts did today without hunting through the news.' },
   { sel: ['#content tr.row'], title: 'Consensus, explained',
-    body: 'The bar splits the analysts into Buy (green), Hold (grey) and Sell (red). The bold number is the consensus score: Buys minus Sells. Confidence estimates how likely the price target is to be reached. Click a row to see why analysts like the stock, its fundamentals, who said what, and the news. Why it helps: you get the reasons, not just a rating.' },
+    body: 'The bar splits the analysts into Buy (green), Hold (grey) and Sell (red). The bold number is the consensus score: Buys minus Sells. Confidence estimates how likely the price target is to be reached. Click a row to see why analysts like the stock, its fundamentals, who said what, and the news, and try “What if I’d bought?” to see what an amount invested on a past day would be worth today. Why it helps: you get the reasons, not just a rating.' },
   { sel: ['.bar-filters'], title: 'Find and filter',
     body: 'Search any ticker or company, switch between US and India, pick Today, 7 or 30 days, or narrow to a segment such as Semiconductors. Why it helps: go from the whole market to the one idea you care about.' },
   { sel: ['.topnav [data-view="leaderboard"]', '.tabbar [data-view="leaderboard"]'], title: 'Who has been right',
-    body: 'Coverage & Leaders ranks stocks by consensus and by how often analysts’ targets were actually hit. Why it helps: weigh opinions by track record, not by volume.' },
+    body: 'Coverage & Leaders ranks stocks by consensus and by how often analysts’ targets were actually hit, and shows how the strongest picks have really performed against the market. Why it helps: weigh opinions by track record, not by volume.' },
   { sel: ['.topnav [data-view="watchlist"]', '.tabbar [data-view="watchlist"]'], title: 'Your watchlist',
     body: 'Pin stocks (a free sign-in) and see how each has moved since you pinned it, plus today’s move. Why it helps: your own ideas, next to what analysts think, in one list.' },
   { sel: ['.topnav [data-view="funds"]', '.tabbar [data-view="funds"]'], title: 'Funds and fact sheets',
