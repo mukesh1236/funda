@@ -1619,7 +1619,7 @@ function _fundCard(f) {
         </div>
         <div class="fund-card-actions">
           <button class="fund-fs" data-sym="${esc(f.symbol)}"
-                  title="Plain-English summary of this fund's official filing">📄 Fact sheet</button>
+                  title="Plain-English summary of this fund's official filing">${icon('file-text', 'ic sm')}Fact sheet</button>
           ${rmBtn}
         </div>
       </div>
@@ -1844,7 +1844,7 @@ async function _toggleFundDetail(sym) {
     ).join('');
     const sectors = Object.entries(d.sector_weights || {})
       .sort((a, b) => b[1] - a[1]).slice(0, 6)
-      .map(([k, v]) => `<div class="sector-row"><span>${esc(k)}</span><span>${v.toFixed(1)}%</span></div>`)
+      .map(([k, v]) => `<div class="sector-row"><span class="sector-name">${esc(k.replace(/_/g, ' '))}</span><span class="num">${v.toFixed(1)}%</span></div>`)
       .join('');
     const inception = d.metrics.inception_date
       ? `<p class="muted" style="font-size:12px">Inception: ${esc(d.metrics.inception_date)}</p>` : '';

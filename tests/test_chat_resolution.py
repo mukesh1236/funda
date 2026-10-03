@@ -138,3 +138,75 @@ def test_detail_panel_lists_morningstar_once(tmp_path):
     core = service.build_detail_core(_with_morningstar_days(tmp_path), "META")
     named = [r.firm for r in core.recommendations if r.firm]
     assert named == ["Morningstar", "Citi"]
+
+
+# ── the open row is a default, not an override ───────────────────────────────
+CAT = StockOverview(symbol="CAT", company_name="Caterpillar Inc.", price=350.0,
+                    fundamentals=Fundamentals(pe_ratio=17.2, eps=20.3))
+CAT_HIT = [{"symbol": "CAT", "name": "Caterpillar Inc."}]
+
+
+def _ask_with_open_row(store, q, open_sym="META", settings=LLM, overview=CAT, search=None):
+    with patch("app.chat.generate_narrative", return_value="reasoned") as gen, \
+         patch("app.service.build_stock_overview", return_value=overview) as ov, \
+         patch("app.sources.search.search_tickers", return_value=search or []) as srch:
+        answer, _, source = answer_question(store, settings, q, "us", open_sym)
+    return (gen.call_args[0][0] if gen.called else None), answer, srch, ov
+
+
+def test_a_named_company_beats_the_open_row(tmp_path):
+    """The reported bug: META's row was open, 'caterpillar' was asked about."""
+    prompt, _, srch, _ = _ask_with_open_row(
+        _store(tmp_path, "META"), "What is caterpillar company fundamentals", search=CAT_HIT)
+    assert srch.call_args[0][0] == "caterpillar"        # not "caterpillar company"
+    assert "STOCK CAT" in prompt and "FOCUS STOCK META" not in prompt
+    assert "P/E 17.2" in prompt
+
+
+def test_pronoun_question_stays_on_the_open_stock_without_searching(tmp_path):
+    prompt, _, srch, _ = _ask_with_open_row(
+        _store(tmp_path, "META"), "what are its fundamentals",
+        overview=StockOverview(symbol="META", company_name="Meta Platforms", fundamentals=META_FUND))
+    assert not srch.called
+    assert "FOCUS STOCK META" in prompt and "P/E 28.5" in prompt
+
+
+def test_a_tracked_stock_named_in_the_question_beats_the_open_row(tmp_path):
+    prompt, _, _, _ = _ask_with_open_row(
+        _store(tmp_path, "META", "NVDA"), "how is NVDA rated", open_sym="META")
+    assert "FOCUS STOCK NVDA" in prompt and "FOCUS STOCK META" not in prompt
+
+
+def test_leftover_words_do_not_hijack_the_open_row(tmp_path):
+    """A fuzzy hit for 'good'/'going up' must not replace the open stock."""
+    junk = [{"symbol": "GM", "name": "General Motors Company"}]
+    prompt, _, _, _ = _ask_with_open_row(
+        _store(tmp_path, "META"), "is the sentiment good", search=junk,
+        overview=StockOverview(symbol="META", company_name="Meta Platforms"))
+    assert "FOCUS STOCK META" in prompt and "STOCK GM" not in prompt
+
+
+def test_without_an_open_row_a_search_hit_is_accepted_as_before(tmp_path):
+    prompt, _, _, _ = _ask_with_open_row(
+        _store(tmp_path, "NVDA"), "caterpillar fundamentals", open_sym=None, search=CAT_HIT)
+    assert "STOCK CAT" in prompt
+
+
+def test_company_boilerplate_never_reaches_the_search(tmp_path):
+    from app.chat import _detect_untracked_symbol
+    with patch("app.sources.search.search_tickers", return_value=CAT_HIT) as srch:
+        assert _detect_untracked_symbol("what is caterpillar company inc fundamentals", "us") == "CAT"
+    assert srch.call_args[0][0] == "caterpillar"
+    with patch("app.sources.search.search_tickers") as srch:
+        assert _detect_untracked_symbol("what are its fundamentals", "us") is None
+    assert not srch.called
+
+
+def test_rule_answer_prefers_the_question_over_the_open_row(tmp_path):
+    from app.chat import _rule_answer
+    from app.service import build_feed
+    store = _store(tmp_path, "META", "NVDA")
+    feed = build_feed(store, days=30, market="us")
+    with patch("app.service.build_stock_overview", return_value=None):
+        out = _rule_answer(store, "us", "how is NVDA rated", "META", feed)
+    assert out.startswith("NVDA")

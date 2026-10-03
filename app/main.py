@@ -121,6 +121,13 @@ def _warm_feed_caches():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _scheduler
+    if not os.environ.get("EDGAR_USER_AGENT"):
+        # SEC rejects requests that do not identify the caller with contact info
+        # (HTTP 403), which silently disables fund fact sheets and full N-PORT
+        # holdings. Say so at startup instead of leaving it to be found in a 403.
+        logger.warning("EDGAR_USER_AGENT is not set: SEC EDGAR will likely reject fetches "
+                       "(fund fact sheets and full holdings). Set it to e.g. "
+                       "'AlphaFunds/1.0 (you@example.com)'.")
     # Promote the admin seed email on every startup — idempotent.
     if settings.admin_email:
         store.ensure_admin(settings.admin_email)

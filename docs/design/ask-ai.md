@@ -32,10 +32,19 @@ Values are in [`schemas/error-codes.md`](../schemas/error-codes.md).
 
 ## Which stock a question is about
 
-`_resolve_symbol` decides once, in this order: the stock the user has open in the
-dashboard; a ticker or company-name word found in the feed; a known alias for names
-that are not in the legal name (`_NAME_ALIASES`: Facebook and Instagram are META,
-Google, Alphabet and YouTube are GOOGL); then a live Yahoo search for anything else.
+`_resolve_symbol` decides once, in this order: a ticker or company-name word found in the
+feed; a known alias for names that are not in the legal name (`_NAME_ALIASES`: Facebook
+and Instagram are META, Google, Alphabet and YouTube are GOOGL); a live Yahoo search for
+anything else; and only then the stock the user has open in the dashboard.
+
+**The open row is a default, not an override.** The page sends it with every question, so
+letting it win answered "caterpillar fundamentals" about whichever row was opened last, and
+no Caterpillar lookup ran (seen in production). Now: a question that refers back ("its
+fundamentals", "this stock") stays on the open stock and skips the name search; any other
+question searches for the company it names, with boilerplate ("company", "inc") removed
+from the query. While a row is open, a search hit is accepted only if its name shares a
+whole word with the question, so leftover words ("good", "going up") cannot hijack it.
+The rule fallback follows the same preference, without the live search.
 **Whether the stock is tracked is decided by the database**, not by which step found
 it, because a search can land on a stock we track.
 

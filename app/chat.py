@@ -180,10 +180,18 @@ _QUESTION_STOPWORDS = frozenset({
     "revenue", "earnings", "profit", "margin", "dividend", "news", "latest",
     "recent", "update", "updates", "headline", "headlines", "performance",
     "return", "returns", "sector", "pe", "ratio",
+    # company-name boilerplate and pronouns: "caterpillar company fundamentals"
+    # must search "caterpillar", and "what are its fundamentals" must not search "its".
+    "company", "companies", "inc", "corp", "corporation", "ltd", "limited",
+    "group", "holdings", "it", "its", "this", "that", "they", "their", "them",
 })
 
+# Words that refer back to the stock the user has open ("what are ITS fundamentals").
+_OPEN_STOCK_REFERENCES = frozenset({"it", "its", "this", "that", "they", "their", "them"})
 
-def _detect_untracked_symbol(question: str, market: str) -> Optional[str]:
+
+def _detect_untracked_symbol(question: str, market: str, name_search: bool = True,
+                             require_name_match: bool = False) -> Optional[str]:
     """When no tracked ticker/company matched, try resolving a stock the app
     doesn't track (e.g. "AAPL market cap", "how's Coca-Cola doing?") so the
     chat can answer with generic overview data instead of "not in my dataset"."""
@@ -200,13 +208,25 @@ def _detect_untracked_symbol(question: str, market: str) -> Optional[str]:
 
     # Otherwise, resolve a company name (e.g. "Coca-Cola") via the same
     # fuzzy search the site's search bar uses.
+    if not name_search:
+        return None
     words = re.findall(r"[a-zA-Z]+", q)
     query = " ".join(w for w in words if w not in _QUESTION_STOPWORDS)
-    if not query:
+    if len(query) < 3:
         return None
     from app.sources.search import search_tickers
     hits = search_tickers(query, market=market, limit=1)
-    return hits[0]["symbol"] if hits else None
+    if not hits:
+        return None
+    if require_name_match:
+        # A stock is already open, so a fuzzy hit for leftover words ("good",
+        # "going up") must not override it. Accept only a hit whose name shares a
+        # whole word with what was asked.
+        asked = set(query.split())
+        named = set(re.findall(r"[a-z]+", (hits[0].get("name") or "").lower()))
+        if not asked & named:
+            return None
+    return hits[0]["symbol"]
 
 
 # Names people use that are not in the company's legal name: renamed companies
@@ -228,12 +248,21 @@ def _alias_symbol(question: str) -> Optional[str]:
 def _resolve_symbol(store: RecommendationStore, question: str, market: str,
                     symbol: Optional[str], stocks: list) -> Tuple[Optional[str], bool]:
     """Which stock the question is about, and whether we track analyst ratings
-    for it. Order: the stock the user has open, a ticker or company name in the
-    feed, a known alias ("Facebook" is META), then a live search for anything
-    else. A search can land on a stock we DO track, so tracking is decided by
-    the database, not by which step found it."""
-    found = (symbol or _detect_symbol(question, stocks) or _alias_symbol(question)
-             or _detect_untracked_symbol(question, market))
+    for it. What the question NAMES wins: a ticker or company name in the feed, a
+    known alias ("Facebook" is META), then a live search for anything else. The
+    stock the user has open is the fallback, used when the question names none or
+    refers back to it ("its fundamentals"). A search can land on a stock we DO
+    track, so tracking is decided by the database, not by which step found it."""
+    found = _detect_symbol(question, stocks) or _alias_symbol(question)
+    if not found:
+        # The open row is only a default. The page sends it with EVERY question,
+        # so letting it win made "caterpillar fundamentals" an answer about
+        # whichever row was opened last, and no Caterpillar lookup ever ran.
+        refers_back = bool(symbol) and bool(
+            _OPEN_STOCK_REFERENCES & set(re.findall(r"[a-z]+", question.lower())))
+        found = _detect_untracked_symbol(
+            question, market, name_search=not refers_back, require_name_match=bool(symbol))
+    found = found or symbol
     if not found:
         return None, False
     return found, bool(store.list_for_symbol(found))
@@ -377,7 +406,7 @@ def _rule_answer(
     rated = [s for s in feed.stocks if s.total_count > 0]
 
     # Specific stock (passed in, mentioned by ticker/name, or a known alias)
-    target = symbol or _detect_symbol(question, feed.stocks) or _alias_symbol(question)
+    target = _detect_symbol(question, feed.stocks) or _alias_symbol(question) or symbol
     if target:
         answer = _stock_answer(store, target, feed.stocks)
         if _needs_fundamentals(question):
