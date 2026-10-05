@@ -152,3 +152,19 @@ def test_openrouter_no_key_short_circuits():
     out = llm.openrouter_generate("hello", settings)
     assert out is None
     assert "OPENROUTER_API_KEY" in llm.last_gemini_error
+
+
+def test_fallback_ranking_skips_code_models_and_prefers_chat_families():
+    """Production regression: with every hardcoded slug retired, the alphabetically
+    first live free model was a small coding model that ignored the stock context."""
+    live = {"cohere/north-mini-code:free", "acme/zeta-chat:free", "qwen/qwen3-80b:free",
+            "meta-llama/llama-4-scout:free", "google/some-vision-vl:free",
+            "openai/gpt-oss-120b:free"}
+    out = llm._rank_free_models(live)
+    assert out[0] == "openai/gpt-oss-120b:free"
+    assert "cohere/north-mini-code:free" not in out and "google/some-vision-vl:free" not in out
+    assert out.index("qwen/qwen3-80b:free") < out.index("acme/zeta-chat:free")
+
+
+def test_fallback_ranking_never_returns_empty_when_only_unsuitable_models_exist():
+    assert llm._rank_free_models({"a/only-code:free"}) == ["a/only-code:free"]

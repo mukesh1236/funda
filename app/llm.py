@@ -54,6 +54,26 @@ _OPENROUTER_FREE_FALLBACKS = [
 _openrouter_catalog: dict = {"ts": 0.0, "free": None}   # live :free slugs, 24h cache
 
 
+# When every hardcoded slug is retired, the chain used to be sorted(live): the
+# alphabetically first free model. In production that was a small coding model
+# ("cohere/north-mini-code:free"), which ignored the stock context and answered
+# "the dataset does not include <company>". Rank instead: general-purpose chat
+# families first, and never a code / vision / audio / safety model.
+_UNSUITABLE_MODEL_HINTS = ("code", "coder", "vision", "-vl", "embed", "guard", "audio",
+                           "image", "whisper", "ocr", "safety", "moderation", "tts")
+_PREFERRED_FAMILIES = ("gpt-oss", "deepseek", "llama-3.3", "llama", "qwen", "mistral",
+                       "gemma", "glm", "kimi", "nemotron")
+
+
+def _rank_free_models(live) -> List[str]:
+    def key(slug: str):
+        name = slug.lower()
+        fam = next((i for i, f in enumerate(_PREFERRED_FAMILIES) if f in name), len(_PREFERRED_FAMILIES))
+        return (fam, slug)
+    suitable = [m for m in live if not any(h in m.lower() for h in _UNSUITABLE_MODEL_HINTS)]
+    return sorted(suitable or live, key=key)
+
+
 def _openrouter_candidates(settings: Settings) -> List[str]:
     """Configured model first, then known-good free models — filtered against
     OpenRouter's live catalog when reachable so we never retry dead slugs."""
@@ -79,7 +99,7 @@ def _openrouter_candidates(settings: Settings) -> List[str]:
         # None of our hardcoded fallbacks are still live (OpenRouter renamed/
         # retired them) — better to try real current free slugs than to keep
         # retrying ones we already know are dead.
-        return sorted(live)
+        return _rank_free_models(live)
     return candidates
 
 

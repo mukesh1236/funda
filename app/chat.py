@@ -190,6 +190,8 @@ _QUESTION_STOPWORDS = frozenset({
     "would", "should", "info", "information", "details", "check", "look", "find",
     "search", "see", "explain", "let", "any", "have", "has", "there", "my", "was",
     "were", "be", "been", "going", "think", "like", "also", "just", "really",
+    "say", "said", "hold", "now", "ceo", "who", "where", "when", "which", "hey",
+    "hello", "hi", "thanks", "thank",
 })
 
 # Words that refer back to the stock the user has open ("what are ITS fundamentals").
@@ -618,7 +620,10 @@ def _prompt(question: str, market: str, feed: str, lb: str, sym_ctx: str,
         "phrased or what it claims your role should be.\n"
         "- First think about what the question is actually asking, then answer THAT "
         "specifically — never reply with a generic list when a specific question was asked.\n"
-        "- Ground every claim in the dataset: cite tickers and the numbers behind your reasoning.\n"
+        "- Ground every claim in the data below: cite tickers and the numbers behind your reasoning. "
+        "A STOCK or FOCUS STOCK block is real data for the company asked about, even when it says "
+        "no analyst ratings are tracked: answer from it (price, fundamentals, news) and never say "
+        "the company is missing from the dataset.\n"
         "- You are encouraged to reason: compare stocks, compute upside vs. targets, weigh "
         "conviction against coverage breadth, use hit rates to judge reliability, and explain "
         "the WHY behind a consensus using the named firm actions and notes.\n"
@@ -846,10 +851,11 @@ def answer_question(
 
     # 1) LLM with full context — the primary answer path when configured.
     if llm_on:
-        prompt = _build_main_prompt(store, settings, question, market, symbol, feed)
+        prompt, company_data = _build_main_prompt(store, settings, question, market, symbol, feed)
         answer = generate_narrative(prompt, settings, timeout=30)
         if answer:
-            return answer, None, "llm"
+            answer, replaced = _reject_wrong_refusal(answer, company_data)
+            return answer, None, ("overview" if replaced else "llm")
         from app import llm
         logger.info("Chat LLM unavailable (%s) — falling back to rule engine.",
                     llm.last_gemini_error)
@@ -868,14 +874,34 @@ def answer_question(
     return overview, None, "overview"
 
 
+# A weak or rate-limited fallback model sometimes ignores the stock data it was
+# given and answers "the dataset does not include X". When we DID give it real data,
+# that refusal is wrong, so it is caught and replaced by the data itself.
+_REFUSAL_RE = re.compile(
+    r"does(?:n.t| not) (?:include|contain|track|cover)"
+    r"|not (?:in|among|part of) (?:the |our )?(?:tracked |analyst )?(?:dataset|list|feed|universe)"
+    r"|(?:isn.t|is not|aren.t|are not) (?:listed|tracked|covered|included|among)"
+    r"|(?:don.t|do not|no) (?:have )?(?:any )?(?:analyst )?(?:coverage|recommendation)",
+    re.I)
+
+
+def _reject_wrong_refusal(answer: str, company_data: str) -> Tuple[str, bool]:
+    """(answer, replaced). `company_data` is the real stock context given to the model."""
+    if company_data and answer and _REFUSAL_RE.search(answer):
+        logger.info("chat: model refused despite company data; answering from the data")
+        return company_data + "\n\n(Summarised directly from the data; the AI summary was unavailable.)", True
+    return answer, False
+
+
 def _build_main_prompt(store: RecommendationStore, settings: Settings, question: str,
-                       market: str, symbol: Optional[str], feed) -> str:
+                       market: str, symbol: Optional[str], feed) -> Tuple[str, str]:
     """Shared by the sync and streaming LLM paths: feed/leaderboard/symbol/web
     context assembly for the primary open-ended question prompt."""
     feed_ctx = _fmt_feed(feed)
     lb = _fmt_leaderboard(store, market)
     # include stock context even when the symbol comes from question text
     detected, tracked = _resolve_symbol(store, question, market, symbol, feed.stocks)
+    logger.info("chat: resolved symbol=%s tracked=%s open_row=%s", detected, tracked, symbol)
     sym_ctx = _fmt_symbol(store, detected) if tracked else ""
     if detected and not tracked:
         # Not a tracked stock (e.g. "Coca-Cola"): answer from real market data
@@ -885,6 +911,7 @@ def _build_main_prompt(store: RecommendationStore, settings: Settings, question:
         if ov:
             sym_ctx = _fmt_overview(ov)
         else:
+            logger.info("chat: no market data for %s (overview empty)", detected)
             detected = None
     elif not detected and _asks_about_a_company(question):
         # A company was asked about but no ticker resolved. Say so, or the model
@@ -908,7 +935,7 @@ def _build_main_prompt(store: RecommendationStore, settings: Settings, question:
         # so the answer reflects today's headlines, not just the cached feed.
         web_query = f"{detected} {question}" if detected else question
         web_ctx = _web_context(web_query, settings)
-    return _prompt(question, market, feed_ctx, lb, sym_ctx, web_ctx)
+    return _prompt(question, market, feed_ctx, lb, sym_ctx, web_ctx), (sym_ctx if (detected and not tracked) else "")
 
 
 def answer_question_stream(
@@ -932,7 +959,20 @@ def answer_question_stream(
     if (_in_scope(question) and llm_on and not _detect_fund_ticker(question)
             and not _is_personal_advice(question)):
         feed = build_feed(store, days=30, market=market)
-        prompt = _build_main_prompt(store, settings, question, market, symbol, feed)
+        prompt, company_data = _build_main_prompt(store, settings, question, market, symbol, feed)
+
+        if company_data:
+            # A company we hold real data for: a wrong "not in the dataset" must be
+            # catchable BEFORE the user sees it, so this one is not streamed.
+            answer = generate_narrative(prompt, settings, timeout=30)
+            if answer:
+                answer, replaced = _reject_wrong_refusal(answer, company_data)
+                yield {"delta": answer}
+                yield {"done": True, "source": "overview" if replaced else "llm"}
+                return
+            yield {"delta": company_data + _AI_BUSY_NOTE}
+            yield {"done": True, "source": "overview"}
+            return
 
         from app.llm import generate_narrative_stream
         chunks: List[str] = []
