@@ -210,3 +210,65 @@ def test_rule_answer_prefers_the_question_over_the_open_row(tmp_path):
     with patch("app.service.build_stock_overview", return_value=None):
         out = _rule_answer(store, "us", "how is NVDA rated", "META", feed)
     assert out.startswith("NVDA")
+
+
+# ── "I ask about dell" / "coke": leftover words, brands, and honest failure ──
+
+from app.chat import _detect_untracked_symbol, _asks_about_a_company  # noqa: E402
+
+
+def test_request_words_do_not_spoil_the_company_search():
+    """"I Ask about dell" searched "i ask dell", which Yahoo's phrase match finds nothing for."""
+    with patch("app.sources.search.search_tickers",
+               return_value=[{"symbol": "DELL", "name": "Dell Technologies"}]) as s:
+        assert _detect_untracked_symbol("I Ask about dell", "us") == "DELL"
+    assert s.call_args[0][0] == "dell"
+
+
+def test_search_falls_back_to_single_words_when_the_phrase_finds_nothing():
+    def fake(q, market="us", limit=1, **kw):
+        return [{"symbol": "DELL", "name": "Dell Technologies"}] if q == "dell" else []
+    with patch("app.sources.search.search_tickers", side_effect=fake) as s:
+        assert _detect_untracked_symbol("zzz quuxer dell", "us") == "DELL"
+    assert [c[0][0] for c in s.call_args_list][0] == "zzz quuxer dell"
+    assert len(s.call_args_list) <= 4
+
+
+def test_fallback_still_respects_the_open_stock():
+    """With a stock open, a hit must share a word with what was asked."""
+    with patch("app.sources.search.search_tickers",
+               return_value=[{"symbol": "XYZ", "name": "Unrelated Corp"}]):
+        assert _detect_untracked_symbol("what about dell", "us", require_name_match=True) is None
+
+
+def test_coke_resolves_through_the_brand_alias():
+    assert _alias_symbol("tell me about coke") == "KO"
+    assert _alias_symbol("how is pepsi doing") == "PEP"
+    assert _alias_symbol("coking coal prices") is None
+
+
+def test_unresolved_company_gets_an_honest_note_not_a_dataset_claim(tmp_path):
+    prompt, _, _ = _ask(_store(tmp_path, "META"), "I ask about the Zzqx stock", overview=None, search=[])
+    assert "could not be matched to a ticker" in prompt
+    assert "ask for its" in prompt
+
+
+def test_broad_questions_get_no_unresolved_note(tmp_path):
+    prompt, _, _ = _ask(_store(tmp_path, "META"), "what are the top picks today?", search=[])
+    assert "could not be matched to a ticker" not in prompt
+    assert not _asks_about_a_company("what are the top picks today?")
+
+
+def test_the_word_I_is_not_mistaken_for_a_ticker():
+    """The real cause of "I ask about dell" failing: a capital "I" matched the
+    typed-in-caps ticker rule, so "I" was looked up and the company never was."""
+    with patch("app.sources.search.search_tickers", return_value=[]):
+        assert _detect_untracked_symbol("I want to know about Dell", "us") is None
+    assert _detect_untracked_symbol("What is AAPL doing, I wonder", "us") == "AAPL"
+
+
+def test_general_questions_are_not_treated_as_a_failed_company_lookup(tmp_path):
+    prompt, _, _ = _ask(_store(tmp_path, "META"), "how does consensus work", search=[])
+    assert "could not be matched to a ticker" not in prompt
+    assert not _asks_about_a_company("how does consensus work")
+    assert _asks_about_a_company("What is the Zzqx stock price")
