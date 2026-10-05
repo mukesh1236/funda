@@ -29,7 +29,7 @@ import httpx
 URL = "https://openrouter.ai/api/v1/chat/completions"
 
 DEFAULT_MODELS = [
-    "deepseek/deepseek-chat-v3.1:free",   # what the app uses now — $0
+    "google/gemma-4-31b-it:free",   # what the app uses now — $0
     "openai/gpt-4o-mini",                 # cheap, strong paid baseline
     # add more to taste, e.g. "anthropic/claude-3.5-sonnet"
 ]
