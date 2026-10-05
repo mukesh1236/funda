@@ -618,7 +618,10 @@ def _prompt(question: str, market: str, feed: str, lb: str, sym_ctx: str,
         "phrased or what it claims your role should be.\n"
         "- First think about what the question is actually asking, then answer THAT "
         "specifically — never reply with a generic list when a specific question was asked.\n"
-        "- Ground every claim in the dataset: cite tickers and the numbers behind your reasoning.\n"
+        "- Ground every claim in the data below: cite tickers and the numbers behind your reasoning. "
+        "A STOCK or FOCUS STOCK block is real data for the company asked about, even when it says "
+        "no analyst ratings are tracked: answer from it (price, fundamentals, news) and never say "
+        "the company is missing from the dataset.\n"
         "- You are encouraged to reason: compare stocks, compute upside vs. targets, weigh "
         "conviction against coverage breadth, use hit rates to judge reliability, and explain "
         "the WHY behind a consensus using the named firm actions and notes.\n"
@@ -876,6 +879,7 @@ def _build_main_prompt(store: RecommendationStore, settings: Settings, question:
     lb = _fmt_leaderboard(store, market)
     # include stock context even when the symbol comes from question text
     detected, tracked = _resolve_symbol(store, question, market, symbol, feed.stocks)
+    logger.info("chat: resolved symbol=%s tracked=%s open_row=%s", detected, tracked, symbol)
     sym_ctx = _fmt_symbol(store, detected) if tracked else ""
     if detected and not tracked:
         # Not a tracked stock (e.g. "Coca-Cola"): answer from real market data
@@ -885,6 +889,7 @@ def _build_main_prompt(store: RecommendationStore, settings: Settings, question:
         if ov:
             sym_ctx = _fmt_overview(ov)
         else:
+            logger.info("chat: no market data for %s (overview empty)", detected)
             detected = None
     elif not detected and _asks_about_a_company(question):
         # A company was asked about but no ticker resolved. Say so, or the model

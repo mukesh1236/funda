@@ -120,3 +120,17 @@ a single message cannot be streamed.
 
 `app/chat.py`, `app/llm.py`; route wiring in `app/main.py` (`/api/chat`,
 `/api/chat/stream`); tests in `tests/test_chat.py`, `tests/test_chat_stream.py`.
+
+## Which model answers (seen in production, 5 Oct)
+
+The configured free model and every hardcoded fallback had been retired from OpenRouter's
+catalogue, so `_openrouter_candidates` fell back to the live free models in alphabetical
+order. The first one was a small coding model (`cohere/north-mini-code:free`), which ignored
+the stock data in the prompt and answered "the dataset does not include Costco". Each question
+also paid for two failed calls first. `_rank_free_models` now orders the live list: general chat
+families first (gpt-oss, deepseek, llama, qwen, mistral, gemma, glm, kimi, nemotron), never a
+code, vision, audio or safety model. The prompt also says a STOCK / FOCUS STOCK block is real
+data even when no analyst ratings are tracked. The durable fix is to set `OPENROUTER_MODEL` to a
+model that is live today (check the OpenRouter model list); the ranking is the safety net.
+Every chat logs `chat: resolved symbol=... tracked=...` and, when market data is empty,
+`chat: no market data for ...`, so the next miss can be told apart from a model problem.
