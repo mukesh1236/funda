@@ -142,3 +142,12 @@ data itself (source `overview`). That path is not streamed, so the wrong sentenc
 A good answer, and any question about a tracked stock, is untouched. Filler words ("say", "hold", "now",
 "ceo") are stopwords so they do not spoil the company search.
 
+**Free model list (as of 5 Oct 2026, from a third-party catalogue snapshot of 3 Oct plus our own logs; re-check
+at openrouter.ai/models).** Default `OPENROUTER_MODEL` is `google/gemma-4-31b-it:free`; fallbacks, in order:
+`qwen/qwen3.8-27b:free`, `google/gemma-4-26b-a4b-it:free`, `nvidia/nemotron-3-super-120b-a12b:free`,
+`nvidia/nemotron-3-ultra-550b-a55b:free`, `thinkingmachines/inkling:free`. The old list (deepseek-chat-v3.1,
+llama-3.3-70b, qwen-2.5-72b, mistral-small-3.2) no longer exists on OpenRouter. Free models are capped at about
+20 requests a minute and 50 a day (1,000 a day once the account has bought $10 of credit), so a paid model in
+`OPENROUTER_MODEL` is steadier. Unverified: whether each listed slug serves requests today; the app filters
+the chain against OpenRouter's live catalogue on every boot.
+

@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     # nothing. Default is DeepSeek V3.1 free — the strongest free open-source
     # model for grounded reasoning at the time of writing.
     openrouter_api_key: str = ""
-    openrouter_model: str = "deepseek/deepseek-chat-v3.1:free"
+    openrouter_model: str = "google/gemma-4-31b-it:free"
 
     # Live web search (Tavily) — grounds causal/"why is X falling" questions the
     # tracked dataset can't answer with real recent context. Free tier at

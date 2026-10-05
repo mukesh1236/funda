@@ -41,15 +41,23 @@ def _record(provider: str, model: Optional[str], ok: bool, started: float,
         logger.debug("llm metrics skipped: %s", e)
 
 
-# Ranked fallback chain of free open-source models. The configured model is
-# always tried first; these cover model renames/retirements/rate limits so a
-# single stale slug can never silently kill the whole AI feature.
+# Ranked fallback chain of free models. The configured model is always tried
+# first; these cover model renames/retirements/rate limits so a single stale slug
+# can never silently kill the whole AI feature. OpenRouter retires free models
+# often: the previous list (deepseek-chat-v3.1, llama-3.3-70b, qwen-2.5-72b,
+# mistral-small-3.2, all ":free") was entirely gone by 5 Oct 2026. This list is from
+# a third-party catalogue snapshot of 3 Oct 2026 and the app's own logs (which showed
+# gemma-4-26b and north-mini-code live); re-check against openrouter.ai/models when
+# the log line "OpenRouter answered via fallback model" appears. Instruction-tuned
+# general models only: no code (poolside laguna, cohere north-mini-code), audio, or
+# safety models.
 _OPENROUTER_FREE_FALLBACKS = [
-    "deepseek/deepseek-chat-v3.1:free",
-    "deepseek/deepseek-chat-v3-0324:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "qwen/qwen-2.5-72b-instruct:free",
-    "mistralai/mistral-small-3.2-24b-instruct:free",
+    "google/gemma-4-31b-it:free",
+    "qwen/qwen3.8-27b:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "thinkingmachines/inkling:free",
 ]
 _openrouter_catalog: dict = {"ts": 0.0, "free": None}   # live :free slugs, 24h cache
 
@@ -60,9 +68,10 @@ _openrouter_catalog: dict = {"ts": 0.0, "free": None}   # live :free slugs, 24h 
 # "the dataset does not include <company>". Rank instead: general-purpose chat
 # families first, and never a code / vision / audio / safety model.
 _UNSUITABLE_MODEL_HINTS = ("code", "coder", "vision", "-vl", "embed", "guard", "audio",
-                           "image", "whisper", "ocr", "safety", "moderation", "tts")
-_PREFERRED_FAMILIES = ("gpt-oss", "deepseek", "llama-3.3", "llama", "qwen", "mistral",
-                       "gemma", "glm", "kimi", "nemotron")
+                           "image", "whisper", "ocr", "safety", "moderation", "tts",
+                           "laguna", "lyria", "omni", "lfm", "-mini")
+_PREFERRED_FAMILIES = ("gemma", "qwen", "gpt-oss", "deepseek", "llama", "mistral",
+                       "nemotron", "glm", "kimi", "inkling")
 
 
 def _rank_free_models(live) -> List[str]:
