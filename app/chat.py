@@ -147,6 +147,7 @@ def _line(s) -> str:
 
 # ── deterministic answer engine ───────────────────────────────────────────────
 _COMMON_WORDS = {
+    "I", "A",   # "I ask about dell" must not look up a ticker called "I"
     "NOW", "IT", "ALL", "ON", "OR", "ARE", "BE", "UP", "DO", "GO", "SO",
     "AI", "ME", "MY", "BY", "IN", "AT", "TO", "OF", "IS", "HI", "AN",
     "RE", "AS", "IF", "NO", "US", "WE", "HE", "SHE", "THE", "AND", "FOR",
@@ -184,6 +185,11 @@ _QUESTION_STOPWORDS = frozenset({
     # must search "caterpillar", and "what are its fundamentals" must not search "its".
     "company", "companies", "inc", "corp", "corporation", "ltd", "limited",
     "group", "holdings", "it", "its", "this", "that", "they", "their", "them",
+    # request / politeness words: "I ask about dell" must search "dell", not "i ask dell"
+    "i", "ask", "asked", "asking", "want", "wanna", "need", "please", "could", "can",
+    "would", "should", "info", "information", "details", "check", "look", "find",
+    "search", "see", "explain", "let", "any", "have", "has", "there", "my", "was",
+    "were", "be", "been", "going", "think", "like", "also", "just", "really",
 })
 
 # Words that refer back to the stock the user has open ("what are ITS fundamentals").
@@ -210,23 +216,51 @@ def _detect_untracked_symbol(question: str, market: str, name_search: bool = Tru
     # fuzzy search the site's search bar uses.
     if not name_search:
         return None
-    words = re.findall(r"[a-zA-Z]+", q)
-    query = " ".join(w for w in words if w not in _QUESTION_STOPWORDS)
+    query = _leftover_query(question)
     if len(query) < 3:
         return None
     from app.sources.search import search_tickers
-    hits = search_tickers(query, market=market, limit=1)
-    if not hits:
-        return None
-    if require_name_match:
-        # A stock is already open, so a fuzzy hit for leftover words ("good",
-        # "going up") must not override it. Accept only a hit whose name shares a
-        # whole word with what was asked.
-        asked = set(query.split())
-        named = set(re.findall(r"[a-z]+", (hits[0].get("name") or "").lower()))
-        if not asked & named:
-            return None
-    return hits[0]["symbol"]
+    # The whole leftover phrase first ("dell technologies"); if a stray word still
+    # spoils it, fall back to the single words, longest first, a few at most.
+    words = sorted({w for w in query.split() if len(w) >= 3}, key=len, reverse=True)
+    candidates = [query] + [w for w in words[:3] if w != query]
+    asked = set(query.split())
+    for cand in candidates:
+        hits = search_tickers(cand, market=market, limit=1)
+        if not hits:
+            continue
+        if require_name_match:
+            # A stock is already open, so a fuzzy hit for leftover words ("good",
+            # "going up") must not override it. Accept only a hit whose name shares a
+            # whole word with what was asked.
+            named = set(re.findall(r"[a-z]+", (hits[0].get("name") or "").lower()))
+            if not asked & named:
+                continue
+        return hits[0]["symbol"]
+    logger.info("chat: no ticker resolved for %r", query)
+    return None
+
+
+_COMPANY_CUES = ("stock", "share", "price", "company", "fundamental", "news", "earnings",
+                 "market cap", "valuation", "analyst", "target", "dividend", "revenue")
+
+
+def _asks_about_a_company(question: str) -> bool:
+    """The question names something specific (a capitalised word that is not the
+    first, or a stock-talk cue) and is not about the whole universe ("top picks").
+    Deliberately narrow: "how does consensus work" must not be treated as a lookup."""
+    q = question.lower()
+    if any(sig in q for sig in _BROAD_QUESTION_SIGNALS) or len(_leftover_query(question)) < 3:
+        return False
+    capitalised = any(w[:1].isupper() and w.lower() not in _QUESTION_STOPWORDS
+                      for w in re.findall(r"[A-Za-z]+", question)[1:])
+    return capitalised or any(c in q for c in _COMPANY_CUES)
+
+
+def _leftover_query(question: str) -> str:
+    """The words of the question that could name a company."""
+    words = re.findall(r"[a-zA-Z]+", question.lower())
+    return " ".join(w for w in words if w not in _QUESTION_STOPWORDS)
 
 
 # Names people use that are not in the company's legal name: renamed companies
@@ -234,6 +268,7 @@ def _detect_untracked_symbol(question: str, market: str, name_search: bool = Tru
 _NAME_ALIASES = {
     "facebook": "META", "instagram": "META",
     "google": "GOOGL", "alphabet": "GOOGL", "youtube": "GOOGL",
+    "coke": "KO", "pepsi": "PEP", "iphone": "AAPL", "ipad": "AAPL",
 }
 
 
@@ -851,6 +886,14 @@ def _build_main_prompt(store: RecommendationStore, settings: Settings, question:
             sym_ctx = _fmt_overview(ov)
         else:
             detected = None
+    elif not detected and _asks_about_a_company(question):
+        # A company was asked about but no ticker resolved. Say so, or the model
+        # improvises "the dataset only tracks AMZN, MSFT..." about a company it
+        # was never given a chance to look up.
+        sym_ctx = ("NOTE: if the question is about a specific company, it could not be "
+                   "matched to a ticker. Say you could not identify it and ask for its "
+                   "ticker symbol. Do not claim which stocks the dataset does or does not "
+                   "track. If the question is not about one company, answer it normally.")
     elif sym_ctx and detected and (_needs_fundamentals(question) or _needs_news(question)):
         # Tracked stock, but the question wants fundamentals (P/E, revenue…) or
         # company news — neither is in the analyst feed. Pull the overview in as

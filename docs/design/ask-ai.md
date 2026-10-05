@@ -48,6 +48,17 @@ The rule fallback follows the same preference, without the live search.
 **Whether the stock is tracked is decided by the database**, not by which step found
 it, because a search can land on a stock we track.
 
+**Why "I ask about Dell" once failed (seen in production).** Three things, all fixed:
+a capital "I" matched the typed-in-caps ticker rule, so the chat looked up a ticker called
+`I` and never searched for the company (`_COMMON_WORDS` now holds `I` and `A`); request
+words ("ask", "want", "please") stayed in the search phrase and spoiled Yahoo's phrase
+match (they are stopwords now); and brands that are not legal names ("Coke", "Pepsi",
+"iPhone") had no alias. When the whole leftover phrase finds nothing the search retries
+with the single words, longest first, at most three more calls. When a company is
+asked about and still nothing resolves, the prompt says so and tells the model to ask for
+the ticker, rather than letting it claim what the dataset does or does not track. A miss
+is logged (`chat: no ticker resolved for ...`) so it is visible in Railway logs.
+
 - Tracked: analyst context (`_fmt_symbol`), plus the market-data overview when the
   question asks for fundamentals or news.
 - Not tracked: the market-data overview (price, fundamentals, returns, news).
