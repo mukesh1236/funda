@@ -134,3 +134,11 @@ data even when no analyst ratings are tracked. The durable fix is to set `OPENRO
 model that is live today (check the OpenRouter model list); the ranking is the safety net.
 Every chat logs `chat: resolved symbol=... tracked=...` and, when market data is empty,
 `chat: no market data for ...`, so the next miss can be told apart from a model problem.
+
+**A refusal is checked, not trusted.** Even with a sensible model, a rate-limited run can land on a weak
+one that says "the dataset does not include X" while holding X's real data. For an untracked
+company we have market data for, `_reject_wrong_refusal` matches that wording and answers from the
+data itself (source `overview`). That path is not streamed, so the wrong sentence is never shown first.
+A good answer, and any question about a tracked stock, is untouched. Filler words ("say", "hold", "now",
+"ceo") are stopwords so they do not spoil the company search.
+

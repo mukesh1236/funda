@@ -272,3 +272,49 @@ def test_general_questions_are_not_treated_as_a_failed_company_lookup(tmp_path):
     assert "could not be matched to a ticker" not in prompt
     assert not _asks_about_a_company("how does consensus work")
     assert _asks_about_a_company("What is the Zzqx stock price")
+
+
+# ── a model that wrongly says "not in the dataset" must not reach the user ──
+
+REFUSAL = ("I'm sorry, but I don't have analyst coverage for an \"FPS\" company in the "
+           "tracked dataset, so I can't provide any details.")
+FPS_OV = StockOverview(symbol="FPS", company_name="Floor & Decor", price=88.0, fundamentals=META_FUND)
+
+
+def _ask_untracked(store, q, model_answer, stream=False):
+    with patch("app.chat.generate_narrative", return_value=model_answer), \
+         patch("app.service.build_stock_overview", return_value=FPS_OV), \
+         patch("app.sources.search.search_tickers", return_value=[{"symbol": "FPS", "name": "Floor & Decor"}]):
+        if stream:
+            from app.chat import answer_question_stream
+            events = list(answer_question_stream(store, LLM, q))
+            return "".join(e.get("delta", "") for e in events), events[-1]["source"]
+        answer, _, source = answer_question(store, LLM, q)
+        return answer, source
+
+
+def test_wrong_refusal_is_replaced_by_the_real_data(tmp_path):
+    answer, source = _ask_untracked(_store(tmp_path, "META"), "What about the Fps stock price", REFUSAL)
+    assert "Current price: $88.0" in answer and "don't have analyst coverage" not in answer
+    assert source == "overview"
+
+
+def test_wrong_refusal_is_replaced_in_the_streaming_path_too(tmp_path):
+    answer, source = _ask_untracked(_store(tmp_path, "META"), "What about the Fps stock price", REFUSAL, stream=True)
+    assert "Current price: $88.0" in answer and "don't have analyst coverage" not in answer
+    assert source == "overview"
+
+
+def test_a_good_answer_about_an_untracked_company_is_left_alone(tmp_path):
+    good = "Floor & Decor trades at $88 with a P/E of 28.5; there are no analyst ratings tracked here."
+    answer, source = _ask_untracked(_store(tmp_path, "META"), "What about the Fps stock price", good)
+    assert answer == good and source == "llm"
+    answer, source = _ask_untracked(_store(tmp_path, "META"), "What about the Fps stock price", good, stream=True)
+    assert answer == good and source == "llm"
+
+
+def test_noise_words_like_say_and_hold_are_not_searched():
+    from app.chat import _leftover_query
+    assert _leftover_query("say fps") == "fps"
+    assert _leftover_query("dram hold") == "dram"
+    assert _leftover_query("who ceo space x") == "space x"
