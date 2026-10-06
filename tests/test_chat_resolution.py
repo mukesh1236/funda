@@ -361,3 +361,32 @@ def test_price_only_detection():
 def test_prompt_tells_the_model_to_match_length_to_the_question(tmp_path):
     prompt, _, _ = _ask(_store(tmp_path, "META"), "Facebook share price")
     assert "Match the length to the question" in prompt
+
+
+# ── "highest upside to target": the model must be GIVEN price and upside ──
+
+def _consensus(sym, target, price, score=5):
+    from app.models import ConsensusOut, OutcomeOut
+    return ConsensusOut(symbol=sym, company_name=sym + " Inc", buy_count=score, hold_count=0, sell_count=0,
+                        total_count=score, consensus_score=score, avg_target=target,
+                        outcome=OutcomeOut(symbol=sym, current_price=price, target_price=target, status="open"))
+
+
+def test_feed_lines_carry_price_and_computed_upside():
+    """The model said "the dataset has no current prices, so I can't calculate upside"
+    because feed lines held the target but never the price."""
+    from types import SimpleNamespace
+    from app.chat import _fmt_feed
+    feed = SimpleNamespace(stocks=[_consensus("AAA", 150.0, 100.0), _consensus("BBB", 110.0, 100.0)])
+    text = _fmt_feed(feed)
+    assert "price $100, upside +50%" in text and "price $100, upside +10%" in text
+    assert "HIGHEST UPSIDE TO AVERAGE TARGET" in text
+    assert text.index("AAA +50%") < text.index("BBB +10%")
+
+
+def test_upside_ranking_covers_stocks_beyond_the_context_cap():
+    from types import SimpleNamespace
+    from app.chat import _fmt_feed, _MAX_FEED
+    stocks = [_consensus(f"S{i:02d}", 101.0, 100.0) for i in range(_MAX_FEED)] + [_consensus("ZZZ", 300.0, 100.0)]
+    text = _fmt_feed(SimpleNamespace(stocks=stocks))
+    assert "ZZZ +200%" in text   # the best upside, past the line cap, still reaches the model

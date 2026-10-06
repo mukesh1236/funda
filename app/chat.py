@@ -495,11 +495,7 @@ def _rule_answer(
 
     # Upside / target potential
     if any(w in q for w in ("upside", "potential", "highest target", "most room", "undervalued")):
-        cand = []
-        for s in rated:
-            cur = s.outcome.current_price if s.outcome else None
-            if s.avg_target and cur and cur > 0:
-                cand.append(((s.avg_target - cur) / cur * 100, s))
+        cand = [(u, s) for s in rated if (u := _upside_pct(s)) is not None]
         cand.sort(key=lambda t: t[0], reverse=True)
         if not cand:
             return "No price-target upside data is available yet."
@@ -546,21 +542,43 @@ def _grounded_fallback(store: RecommendationStore, market: str, question: str,
 
 
 # ── LLM context (open-ended questions) ────────────────────────────────────────
+def _upside_pct(s) -> Optional[float]:
+    """Upside from the current price to the average analyst target, in percent.
+    Computed here so the model never has to (it used to answer "I can't calculate
+    upside: the dataset has no current prices" because the feed lines omitted them)."""
+    cur = s.outcome.current_price if getattr(s, "outcome", None) else None
+    if s.avg_target and cur and cur > 0:
+        return (s.avg_target - cur) / cur * 100
+    return None
+
+
 def _fmt_feed(feed) -> str:
     lines = []
+    ranked = sorted(((u, s) for s in feed.stocks if (u := _upside_pct(s)) is not None),
+                    key=lambda t: t[0], reverse=True)
     for s in feed.stocks[:_MAX_FEED]:
         conf = f"{s.confidence.label}({round(s.confidence.score)})" if s.confidence else "—"
         conv = f"{round(s.conviction_score * 100)}%" if s.conviction_score is not None else "—"
         tgt = f"${s.avg_target}" if s.avg_target else "—"
         status = s.outcome.status if s.outcome else "—"
         segs = ", ".join(s.themes) if s.themes else "—"
+        cur = s.outcome.current_price if s.outcome and s.outcome.current_price else None
+        up = _upside_pct(s)
+        price = f"price ${cur:g}, upside {up:+.0f}%, " if cur and up is not None else (
+            f"price ${cur:g}, " if cur else "")
         lines.append(
             f"{s.symbol} ({s.company_name or ''}): "
             f"{s.buy_count}B/{s.hold_count}H/{s.sell_count}S, score {s.consensus_score:+d}, "
-            f"conviction {conv}, avg_target {tgt}, confidence {conf}, "
+            f"conviction {conv}, {price}avg_target {tgt}, confidence {conf}, "
             f"target_status {status}, segments [{segs}]"
         )
-    return "\n".join(lines) or "(no stocks in the feed)"
+    out = "\n".join(lines) or "(no stocks in the feed)"
+    if ranked:
+        # Across the WHOLE feed, not just the first _MAX_FEED lines above.
+        out += "\nHIGHEST UPSIDE TO AVERAGE TARGET (computed, whole feed): " + "; ".join(
+            f"{s.symbol} {u:+.0f}% (${s.outcome.current_price:g} -> ${s.avg_target:g}, score {s.consensus_score:+d})"
+            for u, s in ranked[:8])
+    return out
 
 
 def _fmt_leaderboard(store: RecommendationStore, market: str) -> str:

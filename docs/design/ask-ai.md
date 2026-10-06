@@ -163,3 +163,10 @@ profile. The prompt now says to match length to the question, and the guard's re
 "X (Name) is trading at $P.", and anything wider returns the full data. A weak model can still ramble; a paid
 `OPENROUTER_MODEL` is the fix for that.
 
+**The model must be given what it is asked to compute (6 Oct).** "Which stocks have the highest upside to their
+target?" got "the dataset has no current prices, so I cannot calculate upside": the feed lines carried
+`avg_target` but never the price. `_fmt_feed` now writes `price $P, upside +N%` on each line (computed in code by
+`_upside_pct`, shared with the rule engine) and appends a "HIGHEST UPSIDE TO AVERAGE TARGET (computed, whole
+feed)" line, because the line cap (`_MAX_FEED`, 40) would otherwise hide the best candidates. Rule of thumb: put
+the derived number in the context; never ask a weak model to do the arithmetic.
+
