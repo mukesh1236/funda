@@ -318,3 +318,75 @@ def test_noise_words_like_say_and_hold_are_not_searched():
     assert _leftover_query("say fps") == "fps"
     assert _leftover_query("dram hold") == "dram"
     assert _leftover_query("who ceo space x") == "space x"
+
+
+def test_a_correct_answer_that_says_no_ratings_are_tracked_is_kept(tmp_path):
+    """Regression (6 Oct): the Walmart answer was right but contained "no analyst
+    recommendations", so the guard replaced it with a raw data dump."""
+    good = ("Walmart (WMT) trades at $107.2, a P/E of 38.8. There are no analyst "
+            "recommendations tracked for it here.")
+    for stream in (False, True):
+        answer, source = _ask_untracked(_store(tmp_path, "META"), "walmart share price", good, stream=stream)
+        assert answer == good and source == "llm"
+
+
+def test_replacement_text_is_readable_not_the_internal_header(tmp_path):
+    answer, _ = _ask_untracked(_store(tmp_path, "META"), "What about the Fps stock price", REFUSAL)
+    assert not answer.startswith("STOCK ")
+    assert answer.startswith("FPS (Floor & Decor). ")
+    assert "AI summary was unavailable" not in answer
+
+
+def test_a_price_question_gets_the_price_not_the_whole_profile(tmp_path):
+    """"Walmart share price" returned the full fundamentals dump."""
+    answer, source = _ask_untracked(_store(tmp_path, "META"), "What is the Fps share price", REFUSAL)
+    assert answer.startswith("FPS (Floor & Decor) is trading at $88.0.")
+    assert "P/E" not in answer and "Fundamentals" not in answer and source == "overview"
+
+
+def test_a_fundamentals_question_still_gets_the_full_data(tmp_path):
+    answer, _ = _ask_untracked(_store(tmp_path, "META"), "Fps fundamentals and price", REFUSAL)
+    assert "P/E 28.5" in answer and "Current price: $88.0" in answer
+
+
+def test_price_only_detection():
+    from app.chat import _wants_price_only
+    assert _wants_price_only("walmart share price")
+    assert _wants_price_only("how much is dell trading at")
+    assert not _wants_price_only("walmart fundamentals")
+    assert not _wants_price_only("tell me about walmart stock price and news")
+    assert not _wants_price_only("is walmart price too high, should i buy")
+
+
+def test_prompt_tells_the_model_to_match_length_to_the_question(tmp_path):
+    prompt, _, _ = _ask(_store(tmp_path, "META"), "Facebook share price")
+    assert "Match the length to the question" in prompt
+
+
+# ── "highest upside to target": the model must be GIVEN price and upside ──
+
+def _consensus(sym, target, price, score=5):
+    from app.models import ConsensusOut, OutcomeOut
+    return ConsensusOut(symbol=sym, company_name=sym + " Inc", buy_count=score, hold_count=0, sell_count=0,
+                        total_count=score, consensus_score=score, avg_target=target,
+                        outcome=OutcomeOut(symbol=sym, current_price=price, target_price=target, status="open"))
+
+
+def test_feed_lines_carry_price_and_computed_upside():
+    """The model said "the dataset has no current prices, so I can't calculate upside"
+    because feed lines held the target but never the price."""
+    from types import SimpleNamespace
+    from app.chat import _fmt_feed
+    feed = SimpleNamespace(stocks=[_consensus("AAA", 150.0, 100.0), _consensus("BBB", 110.0, 100.0)])
+    text = _fmt_feed(feed)
+    assert "price $100, upside +50%" in text and "price $100, upside +10%" in text
+    assert "HIGHEST UPSIDE TO AVERAGE TARGET" in text
+    assert text.index("AAA +50%") < text.index("BBB +10%")
+
+
+def test_upside_ranking_covers_stocks_beyond_the_context_cap():
+    from types import SimpleNamespace
+    from app.chat import _fmt_feed, _MAX_FEED
+    stocks = [_consensus(f"S{i:02d}", 101.0, 100.0) for i in range(_MAX_FEED)] + [_consensus("ZZZ", 300.0, 100.0)]
+    text = _fmt_feed(SimpleNamespace(stocks=stocks))
+    assert "ZZZ +200%" in text   # the best upside, past the line cap, still reaches the model

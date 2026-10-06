@@ -151,3 +151,22 @@ llama-3.3-70b, qwen-2.5-72b, mistral-small-3.2) no longer exists on OpenRouter. 
 `OPENROUTER_MODEL` is steadier. Unverified: whether each listed slug serves requests today; the app filters
 the chain against OpenRouter's live catalogue on every boot.
 
+**The guard must not eat good answers (6 Oct).** Its first version matched "no analyst recommendations", so a
+correct Walmart answer ("trades at $107.2... no analyst recommendations tracked") was replaced by a raw data dump.
+A reply is now treated as a refusal only if it has refusal wording AND quotes no figure (a `$` amount, a `%`, or
+P/E). The replacement is also rewritten from the internal "STOCK X (...) — no analyst recommendations tracked..."
+header into a plain "X (Name)." lead-in.
+
+**Answer the size of the question.** A price-only question ("Walmart share price") must not return the whole
+profile. The prompt now says to match length to the question, and the guard's replacement does the same:
+`_wants_price_only` (price words, and none of fundamentals / news / overview / "should I") returns one line,
+"X (Name) is trading at $P.", and anything wider returns the full data. A weak model can still ramble; a paid
+`OPENROUTER_MODEL` is the fix for that.
+
+**The model must be given what it is asked to compute (6 Oct).** "Which stocks have the highest upside to their
+target?" got "the dataset has no current prices, so I cannot calculate upside": the feed lines carried
+`avg_target` but never the price. `_fmt_feed` now writes `price $P, upside +N%` on each line (computed in code by
+`_upside_pct`, shared with the rule engine) and appends a "HIGHEST UPSIDE TO AVERAGE TARGET (computed, whole
+feed)" line, because the line cap (`_MAX_FEED`, 40) would otherwise hide the best candidates. Rule of thumb: put
+the derived number in the context; never ask a weak model to do the arithmetic.
+
