@@ -881,15 +881,24 @@ _REFUSAL_RE = re.compile(
     r"does(?:n.t| not) (?:include|contain|track|cover)"
     r"|not (?:in|among|part of) (?:the |our )?(?:tracked |analyst )?(?:dataset|list|feed|universe)"
     r"|(?:isn.t|is not|aren.t|are not) (?:listed|tracked|covered|included|among)"
-    r"|(?:don.t|do not|no) (?:have )?(?:any )?(?:analyst )?(?:coverage|recommendation)",
+    r"|(?:don.t|do not) have (?:any )?(?:analyst )?(?:coverage|recommendations?|data)",
     re.I)
+# A real answer quotes the data; a refusal does not. "No analyst recommendations are
+# tracked" inside an answer that gives the price is correct, not a refusal (the first
+# version of this guard replaced exactly such a Walmart answer with a raw data dump).
+_QUOTES_DATA_RE = re.compile(r"\$\s?\d|\d+(?:\.\d+)?\s?%|\bP/?E\b", re.I)
+_DATA_HEADER_RE = re.compile(
+    r"^STOCK (\S+) \(([^)]*)\) — no analyst recommendations tracked for this one, "
+    r"but general market data is available:\s*")
 
 
 def _reject_wrong_refusal(answer: str, company_data: str) -> Tuple[str, bool]:
     """(answer, replaced). `company_data` is the real stock context given to the model."""
-    if company_data and answer and _REFUSAL_RE.search(answer):
+    if (company_data and answer and _REFUSAL_RE.search(answer)
+            and not _QUOTES_DATA_RE.search(answer)):
         logger.info("chat: model refused despite company data; answering from the data")
-        return company_data + "\n\n(Summarised directly from the data; the AI summary was unavailable.)", True
+        text = _DATA_HEADER_RE.sub(lambda m: f"{m.group(1)} ({m.group(2)}). ", company_data, count=1)
+        return text + "\n\n(Shown straight from the market data. No analyst ratings are tracked for this company.)", True
     return answer, False
 
 

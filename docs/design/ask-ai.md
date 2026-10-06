@@ -151,3 +151,9 @@ llama-3.3-70b, qwen-2.5-72b, mistral-small-3.2) no longer exists on OpenRouter. 
 `OPENROUTER_MODEL` is steadier. Unverified: whether each listed slug serves requests today; the app filters
 the chain against OpenRouter's live catalogue on every boot.
 
+**The guard must not eat good answers (6 Oct).** Its first version matched "no analyst recommendations", so a
+correct Walmart answer ("trades at $107.2... no analyst recommendations tracked") was replaced by a raw data dump.
+A reply is now treated as a refusal only if it has refusal wording AND quotes no figure (a `$` amount, a `%`, or
+P/E). The replacement is also rewritten from the internal "STOCK X (...) — no analyst recommendations tracked..."
+header into a plain "X (Name)." lead-in.
+

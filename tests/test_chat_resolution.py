@@ -318,3 +318,20 @@ def test_noise_words_like_say_and_hold_are_not_searched():
     assert _leftover_query("say fps") == "fps"
     assert _leftover_query("dram hold") == "dram"
     assert _leftover_query("who ceo space x") == "space x"
+
+
+def test_a_correct_answer_that_says_no_ratings_are_tracked_is_kept(tmp_path):
+    """Regression (6 Oct): the Walmart answer was right but contained "no analyst
+    recommendations", so the guard replaced it with a raw data dump."""
+    good = ("Walmart (WMT) trades at $107.2, a P/E of 38.8. There are no analyst "
+            "recommendations tracked for it here.")
+    for stream in (False, True):
+        answer, source = _ask_untracked(_store(tmp_path, "META"), "walmart share price", good, stream=stream)
+        assert answer == good and source == "llm"
+
+
+def test_replacement_text_is_readable_not_the_internal_header(tmp_path):
+    answer, _ = _ask_untracked(_store(tmp_path, "META"), "What about the Fps stock price", REFUSAL)
+    assert not answer.startswith("STOCK ")
+    assert answer.startswith("FPS (Floor & Decor). ")
+    assert "AI summary was unavailable" not in answer
