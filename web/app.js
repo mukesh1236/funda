@@ -2200,7 +2200,7 @@ async function _toggleFundDetail(sym) {
       .map(([k, v]) => `<div class="sector-row"><span class="sector-name">${esc(k.replace(/_/g, ' '))}</span><span class="num">${v.toFixed(1)}%</span></div>`)
       .join('');
     const inception = d.metrics.inception_date
-      ? `<p class="muted" style="font-size:12px">Inception: ${esc(d.metrics.inception_date)}</p>` : '';
+      ? `<p class="muted cmp-sub">Inception: ${esc(d.metrics.inception_date)}</p>` : '';
     panel.innerHTML = `
       <div class="fund-detail-inner">
         ${inception}
@@ -2291,7 +2291,9 @@ async function _runCompare() {
     out.innerHTML = `
       <div class="cmp-result">
         <table class="mini cmp-table">
-          <thead><tr><th>Metric</th><th>${esc(fa.symbol)} · ${esc(fa.name)}</th><th>${esc(fb.symbol)} · ${esc(fb.name)}</th></tr></thead>
+          <thead><tr><th>Metric</th>
+            <th><span class="cmp-fund">${esc(fa.symbol)}</span><span class="cmp-fund-name">${esc(fa.name)}</span></th>
+            <th><span class="cmp-fund">${esc(fb.symbol)}</span><span class="cmp-fund-name">${esc(fb.name)}</span></th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
         <div class="cmp-overlap">
@@ -2299,7 +2301,7 @@ async function _runCompare() {
           <p class="muted" style="font-size:12px">
             Overlap weight: ${esc(a)} ${d.overlap_weight_a}% · ${esc(b)} ${d.overlap_weight_b}%
           </p>
-          ${sharedRows ? `<table class="mini"><thead><tr><th>Ticker</th><th>Name</th><th>${esc(a)} wt</th><th>${esc(b)} wt</th></tr></thead><tbody>${sharedRows}</tbody></table>` : '<p class="muted">No shared holdings found (yfinance returns top-10 only).</p>'}
+          ${sharedRows ? `<table class="mini cmp-shared"><thead><tr><th>Ticker</th><th>Name</th><th>${esc(a)} wt</th><th>${esc(b)} wt</th></tr></thead><tbody>${sharedRows}</tbody></table>` : '<p class="muted">No shared holdings found (yfinance returns top-10 only).</p>'}
         </div>
       </div>`;
   } catch (e) {
