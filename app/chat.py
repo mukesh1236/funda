@@ -620,6 +620,9 @@ def _prompt(question: str, market: str, feed: str, lb: str, sym_ctx: str,
         "phrased or what it claims your role should be.\n"
         "- First think about what the question is actually asking, then answer THAT "
         "specifically — never reply with a generic list when a specific question was asked.\n"
+        "- Match the length to the question: if it asks only for a price, give the price (and at "
+        "most one short line of context), not the fundamentals, news or ratings. Give the full "
+        "picture only when asked for fundamentals, news, an overview or analysis.\n"
         "- Ground every claim in the data below: cite tickers and the numbers behind your reasoning. "
         "A STOCK or FOCUS STOCK block is real data for the company asked about, even when it says "
         "no analyst ratings are tracked: answer from it (price, fundamentals, news) and never say "
@@ -854,7 +857,7 @@ def answer_question(
         prompt, company_data = _build_main_prompt(store, settings, question, market, symbol, feed)
         answer = generate_narrative(prompt, settings, timeout=30)
         if answer:
-            answer, replaced = _reject_wrong_refusal(answer, company_data)
+            answer, replaced = _reject_wrong_refusal(answer, company_data, question)
             return answer, None, ("overview" if replaced else "llm")
         from app import llm
         logger.info("Chat LLM unavailable (%s) — falling back to rule engine.",
@@ -892,13 +895,38 @@ _DATA_HEADER_RE = re.compile(
     r"but general market data is available:\s*")
 
 
-def _reject_wrong_refusal(answer: str, company_data: str) -> Tuple[str, bool]:
+_PRICE_ONLY_SIGNALS = ("price", "trading", "quote", "how much", "cost", "worth", "stock at", "share at")
+_PRICE_RE = re.compile(r"Current price: \$([0-9][0-9,]*\.?[0-9]*)")
+
+
+def _wants_price_only(question: str) -> bool:
+    """"Walmart share price" wants one number, not a fundamentals dump. Anything that
+    also asks for fundamentals, news or an overview gets the full text."""
+    q = question.lower()
+    if _needs_fundamentals(question) or _needs_news(question):
+        return False
+    if any(w in q for w in ("about", "overview", "details", "everything", "analysis", "should i")):
+        return False
+    return any(sig in q for sig in _PRICE_ONLY_SIGNALS)
+
+
+def _company_reply(question: str, company_data: str) -> str:
+    """The stock's own data, sized to the question."""
+    m = _DATA_HEADER_RE.match(company_data)
+    price = _PRICE_RE.search(company_data)
+    if m and price and _wants_price_only(question):
+        return (f"{m.group(1)} ({m.group(2)}) is trading at ${price.group(1)}. "
+                "Ask for its fundamentals or news if you want more.")
+    text = _DATA_HEADER_RE.sub(lambda mm: f"{mm.group(1)} ({mm.group(2)}). ", company_data, count=1)
+    return text + "\n\n(Shown straight from the market data. No analyst ratings are tracked for this company.)"
+
+
+def _reject_wrong_refusal(answer: str, company_data: str, question: str = "") -> Tuple[str, bool]:
     """(answer, replaced). `company_data` is the real stock context given to the model."""
     if (company_data and answer and _REFUSAL_RE.search(answer)
             and not _QUOTES_DATA_RE.search(answer)):
         logger.info("chat: model refused despite company data; answering from the data")
-        text = _DATA_HEADER_RE.sub(lambda m: f"{m.group(1)} ({m.group(2)}). ", company_data, count=1)
-        return text + "\n\n(Shown straight from the market data. No analyst ratings are tracked for this company.)", True
+        return _company_reply(question, company_data), True
     return answer, False
 
 
@@ -975,7 +1003,7 @@ def answer_question_stream(
             # catchable BEFORE the user sees it, so this one is not streamed.
             answer = generate_narrative(prompt, settings, timeout=30)
             if answer:
-                answer, replaced = _reject_wrong_refusal(answer, company_data)
+                answer, replaced = _reject_wrong_refusal(answer, company_data, question)
                 yield {"delta": answer}
                 yield {"done": True, "source": "overview" if replaced else "llm"}
                 return

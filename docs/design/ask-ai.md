@@ -157,3 +157,9 @@ A reply is now treated as a refusal only if it has refusal wording AND quotes no
 P/E). The replacement is also rewritten from the internal "STOCK X (...) — no analyst recommendations tracked..."
 header into a plain "X (Name)." lead-in.
 
+**Answer the size of the question.** A price-only question ("Walmart share price") must not return the whole
+profile. The prompt now says to match length to the question, and the guard's replacement does the same:
+`_wants_price_only` (price words, and none of fundamentals / news / overview / "should I") returns one line,
+"X (Name) is trading at $P.", and anything wider returns the full data. A weak model can still ramble; a paid
+`OPENROUTER_MODEL` is the fix for that.
+

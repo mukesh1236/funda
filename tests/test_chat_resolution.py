@@ -335,3 +335,29 @@ def test_replacement_text_is_readable_not_the_internal_header(tmp_path):
     assert not answer.startswith("STOCK ")
     assert answer.startswith("FPS (Floor & Decor). ")
     assert "AI summary was unavailable" not in answer
+
+
+def test_a_price_question_gets_the_price_not_the_whole_profile(tmp_path):
+    """"Walmart share price" returned the full fundamentals dump."""
+    answer, source = _ask_untracked(_store(tmp_path, "META"), "What is the Fps share price", REFUSAL)
+    assert answer.startswith("FPS (Floor & Decor) is trading at $88.0.")
+    assert "P/E" not in answer and "Fundamentals" not in answer and source == "overview"
+
+
+def test_a_fundamentals_question_still_gets_the_full_data(tmp_path):
+    answer, _ = _ask_untracked(_store(tmp_path, "META"), "Fps fundamentals and price", REFUSAL)
+    assert "P/E 28.5" in answer and "Current price: $88.0" in answer
+
+
+def test_price_only_detection():
+    from app.chat import _wants_price_only
+    assert _wants_price_only("walmart share price")
+    assert _wants_price_only("how much is dell trading at")
+    assert not _wants_price_only("walmart fundamentals")
+    assert not _wants_price_only("tell me about walmart stock price and news")
+    assert not _wants_price_only("is walmart price too high, should i buy")
+
+
+def test_prompt_tells_the_model_to_match_length_to_the_question(tmp_path):
+    prompt, _, _ = _ask(_store(tmp_path, "META"), "Facebook share price")
+    assert "Match the length to the question" in prompt
