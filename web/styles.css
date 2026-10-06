@@ -862,11 +862,24 @@ td .tick { color: var(--text); font-weight: 700; }
 .drv-val { text-align: right; font-variant-numeric: tabular-nums; }
 .drv-cum { text-align: right; font-variant-numeric: tabular-nums; font-size: 11px; }
 
-.cmp-section { margin-top: 16px; padding: 16px; }
-.cmp-inputs { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
-.cmp-result { margin-top: 12px; }
-.cmp-table td, .cmp-table th { padding: 6px 12px; }
-.cmp-overlap { font-size: 13px; color: var(--text-2); margin: 8px 0; }
+.cmp-section { margin-top: var(--sp-6); padding: var(--sp-6); }
+.cmp-inputs { display: flex; gap: var(--sp-4); align-items: center; flex-wrap: wrap; margin-bottom: var(--sp-5); }
+.cmp-result { margin-top: var(--sp-5); }
+.cmp-overlap { font-size: var(--fs-body); color: var(--text-2); margin: var(--sp-4) 0; }
+.cmp-sub { font-size: var(--fs-meta); }
+/* Both compare tables size to the card, never past it. The global `th, td` rule is
+   nowrap, which let a long fund name make the table 580px wide on a 390px phone and
+   pushed the second fund's column off-screen. Fixed layout + wrapping cells fixes that;
+   the fund name sits under its ticker so the header stays short. */
+.cmp-table, .cmp-shared { table-layout: fixed; }
+.cmp-table td, .cmp-table th, .cmp-shared td, .cmp-shared th {
+  padding: var(--sp-3) var(--sp-5); white-space: normal; overflow-wrap: anywhere;
+}
+.cmp-table th:first-child { width: 28%; }
+.cmp-shared th:first-child { width: 22%; }
+.cmp-shared th:nth-child(3), .cmp-shared th:nth-child(4) { width: 22%; }
+.cmp-fund { display: block; }
+.cmp-fund-name { display: block; font-weight: 400; color: var(--muted); font-size: var(--fs-micro); }
 
 /* ── Digest ────────────────────────────────────────────────────────────── */
 .digest-wrap { padding: 16px; }
