@@ -30,6 +30,7 @@ docs/
 | Chase memory or cost | [`workflows/memory-investigation.md`](workflows/memory-investigation.md), [`workflows/cost-check.md`](workflows/cost-check.md) |
 | Check what is insecure or required in production | [`security/policy.md`](security/policy.md) |
 | Handle AI degradation or a spent AI budget | [`workflows/incident-llm-budget.md`](workflows/incident-llm-budget.md) |
+| Find how many concurrent users the app serves | [`workflows/load-test.md`](workflows/load-test.md) |
 
 ## Features (`design/`)
 
